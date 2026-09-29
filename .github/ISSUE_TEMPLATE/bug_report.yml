@@ -1,0 +1,47 @@
+name: Bug report
+about: Report a reproducible problem
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先检查诊断报告是否包含不希望公开的 SSID、私有 IP 或其他信息，并自行脱敏。
+  - type: input
+    id: version
+    attributes:
+      label: WiFi Watchdog version
+      placeholder: v1.3.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: adapter
+    attributes:
+      label: Wi-Fi adapter
+      placeholder: Intel Wi-Fi 6E AX211
+  - type: textarea
+    id: vpn
+    attributes:
+      label: VPN / TUN environment
+      description: 是否使用 Clash/Mihomo/sing-box/WireGuard 等？TUN 是否开启？本地端口是多少？
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / diagnostics
+      description: 请粘贴相关片段或上传已脱敏的诊断报告。

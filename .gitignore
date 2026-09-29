@@ -1,0 +1,22 @@
+# Build outputs
+*.exe
+*.zip
+*.test
+*.test.exe
+dist/
+build/
+
+# Local IDE
+.vscode/
+.idea/
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Runtime data (normally under %LOCALAPPDATA%)
+config.json
+state.json
+watchdog.log*
+diagnostics-*.txt
