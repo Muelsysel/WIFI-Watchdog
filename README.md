@@ -1,0 +1,199 @@
+# WiFi Watchdog
+
+一个面向 Windows 的轻量级 Wi‑Fi 自动检测与恢复工具，重点适配校园网、802.1X、VPN/TUN、多网卡和无人值守场景。
+
+> 当前版本：**v1.3.0**
+>
+> GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
+
+## 为什么做这个项目
+
+Windows 有时会出现“Wi‑Fi 显示已连接，但实际无法访问互联网”的状态。常见原因包括 AP 漫游、DHCP 租约、校园网认证、无线驱动、WLAN Profile、VPN/TUN 路由、DNS 或系统网络栈异常。
+
+WiFi Watchdog 的目标不是看到一次失败就重启网卡，而是：
+
+1. 先确认系统是否真的断网；
+2. 再判断是不是 VPN/TUN、认证门户或系统路由问题；
+3. 只有确认 Wi‑Fi 底层有足够故障证据时，才执行逐级恢复；
+4. 尽量避免对正常 VPN、802.1X 和校园认证造成二次干扰。
+
+## 核心特性
+
+- Windows 系统托盘常驻，无控制台窗口。
+- Native Wi‑Fi API 获取 WLAN Profile / SSID / 信号 / 接口 GUID。
+- 自动记忆最后一次成功 Wi‑Fi Profile，不依赖 SSID 与 Profile 同名。
+- VPN/TUN-aware：识别 TUN、Wintun、WireGuard、Mihomo、Clash、sing-box、OpenVPN、TAP、Tailscale、ZeroTier 等线索。
+- 支持自定义本地 VPN 端口，默认 `2026`；会尝试 HTTP CONNECT / SOCKS5 代理握手。
+- 系统互联网与 Wi‑Fi Underlay 分层判断，降低 TUN 环境下误判。
+- 多源 HTTP/HTTPS/TCP 探测，支持疑似 captive portal 保护。
+- 分层恢复：DNS/DHCP → Profile 重连 → Native WLAN → netsh → 网卡重启 → 可选 WlanSvc。
+- 两次自动恢复之间有持久化冷却时间；即使重启程序也不会绕过冷却。
+- 设置页所有耗时操作后台化，避免 UI 因 `schtasks` / 网络探测而卡死。
+- 诊断报告、日志轮转、原子配置写入、单实例保护。
+- GitHub Actions 自动 CI / Windows x64 + ARM64 Release 构建。
+
+## 默认策略
+
+```text
+系统网络正常
+    ↓
+每 10 分钟检查一次
+    ↓
+首次失败
+    ↓
+每 10 秒快速复检
+    ↓
+连续失败 5 次
+    ↓
+综合判断：VPN/TUN / Portal / Wi-Fi Underlay
+    ↓
+仅在允许修复 Wi-Fi 时进入恢复链
+    ↓
+恢复失败后至少等待 10 分钟
+```
+
+## VPN / TUN 场景
+
+v1.3 不会把“Wi‑Fi 直连探测失败”直接等同于“电脑没网”。
+
+如果系统互联网通过 TUN 正常：
+
+```text
+Wi-Fi → TUN/VPN → Internet
+```
+
+程序直接认为系统在线，不操作 Wi‑Fi。
+
+如果系统无网，但检测到 VPN/TUN 且 Wi‑Fi 本地链路没有强故障证据，会优先保护 Wi‑Fi，避免因为 VPN 路由故障反复重启无线网卡。
+
+## 恢复链
+
+1. 刷新 DNS + 定向 DHCP renew。
+2. Native `WlanDisconnect` / `WlanScan` / `WlanConnect`。
+3. 轮询确认真正关联到目标 Profile/SSID。
+4. `netsh wlan connect` 兼容兜底。
+5. 禁用/启用无线网卡。
+6. 网卡恢复后再次主动连接保存 Profile。
+7. 再次 DHCP / DNS 修复。
+8. 可选重启 `WlanSvc`（默认关闭）。
+
+不会自动执行 `winsock reset`、`netsh int ip reset` 等高侵入且可能要求重启 Windows 的操作。
+
+## v1.3 的 UI 卡顿修复
+
+v1.2 的设置窗口会在 UI 主线程里同步执行：
+
+```text
+schtasks.exe /Query
+schtasks.exe /Create
+schtasks.exe /Delete
+```
+
+任务计划程序或系统服务响应慢时，Win32 消息循环停止处理，因此窗口会表现为“卡住/未响应”。
+
+v1.3 将以下操作全部放到后台 goroutine，并设置超时：
+
+- 开机自启状态查询；
+- 创建/删除计划任务；
+- 网络综合评估；
+- 诊断报告生成；
+- 配置保存相关系统操作。
+
+设置窗口会立即显示并保持响应。
+
+## 使用
+
+### 直接运行
+
+下载 Release 中对应架构：
+
+- `WiFiWatchdog-windows-amd64.zip`：绝大多数 Intel/AMD Windows 电脑；
+- `WiFiWatchdog-windows-arm64.zip`：Windows on ARM。
+
+解压后运行 `WiFiWatchdog.exe`。
+
+当前版本需要管理员权限，因为禁用/启用网卡、DHCP renew、WlanSvc 等恢复动作需要提升权限。
+
+### 推荐首次配置
+
+1. 正常连接目标校园 Wi‑Fi；
+2. 托盘右键 → **记住当前 Wi‑Fi 为恢复目标**；
+3. 如果电脑长期固定使用该网络，可开启“Wi‑Fi 意外断开时主动连接”；
+4. VPN/TUN 保护建议保持开启；
+5. `WlanSvc` 最后兜底建议保持关闭，除非普通恢复链仍无法解决问题。
+
+## 数据与日志
+
+默认目录：
+
+```text
+%LOCALAPPDATA%\WiFiWatchdog\
+```
+
+包含：
+
+- `config.json`：配置；
+- `state.json`：恢复目标和自动恢复冷却状态；
+- `watchdog.log`：运行日志；
+- `diagnostics-*.txt`：手动生成的诊断报告。
+
+程序不会读取或保存 Wi‑Fi / 802.1X 密码。认证凭据始终由 Windows WLAN Profile 管理。
+
+## 从源码构建
+
+要求：Go 1.23+。
+
+```powershell
+go test ./...
+go vet ./...
+go build -trimpath -ldflags "-H=windowsgui -s -w" -o WiFiWatchdog.exe .
+```
+
+也可以运行：
+
+```powershell
+.\build-windows.ps1
+```
+
+## 仓库结构
+
+```text
+.
+├── main_windows.go          # App 生命周期、托盘、控制中心、监控状态机
+├── network_windows.go       # 系统 Internet / VPN-TUN / Underlay 判断
+├── recovery_windows.go      # Profile 持久化、恢复链、诊断报告
+├── wlan_windows.go          # Native Wi-Fi API 封装
+├── logic_windows_test.go    # 关键纯逻辑与持久化测试
+├── docs/
+│   ├── ARCHITECTURE.md
+│   └── TROUBLESHOOTING.md
+└── .github/
+    ├── workflows/
+    └── ISSUE_TEMPLATE/
+```
+
+## 安全边界
+
+本项目尽量保守，但不能保证任何校园网故障都能由本机恢复。例如：
+
+- 学校认证服务器或 AP 故障；
+- 账号被禁用或 802.1X 凭据过期；
+- 无线驱动内核级崩溃；
+- VPN 服务端不可用；
+- 网络管理员主动限制；
+- Windows 网络组件本身损坏。
+
+遇到问题请通过托盘菜单生成诊断报告，再提交 Issue。
+
+## 隐私
+
+- 无遥测；
+- 无云端上传；
+- 不收集 Wi‑Fi 密码；
+- 日志与诊断信息只保存在本机。
+
+诊断报告可能包含本机网卡名称、私有 IP、路由表、SSID/Profile 等信息。公开提交 Issue 前请自行检查并脱敏。
+
+## License
+
+MIT License。见 [LICENSE](LICENSE)。
