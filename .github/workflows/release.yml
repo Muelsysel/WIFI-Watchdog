@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Test and vet
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Build release archives
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+
+          foreach ($arch in @('amd64', 'arm64')) {
+            $env:GOARCH = $arch
+            $folder = "dist/WiFiWatchdog-windows-$arch"
+            New-Item -ItemType Directory -Force $folder | Out-Null
+            go build -trimpath -ldflags '-H=windowsgui -s -w' -o "$folder/WiFiWatchdog.exe" .
+            Copy-Item README.md, README_EN.md, LICENSE, CHANGELOG.md $folder
+            Compress-Archive -Path "$folder/*" -DestinationPath "dist/WiFiWatchdog-windows-$arch.zip" -Force
+          }
+
+          Get-ChildItem dist/*.zip | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Add-Content dist/SHA256SUMS.txt
+          }
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/*.zip dist/SHA256SUMS.txt --generate-notes --title "WiFi Watchdog ${{ github.ref_name }}"
