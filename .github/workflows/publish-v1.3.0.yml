@@ -1,0 +1,65 @@
+name: Publish v1.3.0
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-v1.3.0.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Test and vet
+        shell: pwsh
+        run: |
+          go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Windows archives
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+
+          foreach ($arch in @('amd64', 'arm64')) {
+            $env:GOARCH = $arch
+            $folder = "dist/WiFiWatchdog-windows-$arch"
+            New-Item -ItemType Directory -Force $folder | Out-Null
+            go build -trimpath -ldflags '-H=windowsgui -s -w' -o "$folder/WiFiWatchdog.exe" .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Copy-Item README.md, README_EN.md, LICENSE, CHANGELOG.md $folder
+            Compress-Archive -Path "$folder/*" -DestinationPath "dist/WiFiWatchdog-windows-$arch.zip" -Force
+          }
+
+          Get-ChildItem dist/*.zip | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Add-Content dist/SHA256SUMS.txt
+          }
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'v1.3.0'
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/*.zip dist/SHA256SUMS.txt --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create $tag dist/*.zip dist/SHA256SUMS.txt --target main --title "WiFi Watchdog v1.3.0" --generate-notes --repo "${{ github.repository }}"
+          }
