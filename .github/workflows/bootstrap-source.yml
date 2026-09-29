@@ -43,7 +43,10 @@ jobs:
           tar -xJf source.tar.xz -C /tmp/wifi-watchdog-source
           cp -a /tmp/wifi-watchdog-source/. .
           rm -rf .bootstrap source.b64 source.tar.xz
-          rm -f .github/workflows/bootstrap-source.yml
+          # GitHub Actions' GITHUB_TOKEN cannot create/update workflow files
+          # in this repo. Keep the bootstrap workflow unchanged and let the
+          # connected GitHub app publish CI/Release workflows afterward.
+          rm -f .github/workflows/ci.yml .github/workflows/release.yml
 
       - name: Publish source tree
         shell: bash
