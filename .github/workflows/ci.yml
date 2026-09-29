@@ -21,9 +21,11 @@ jobs:
       - name: Check formatting
         shell: pwsh
         run: |
-          $files = gofmt -l *.go
+          $goFiles = Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { $_.FullName }
+          $files = gofmt -l $goFiles
           if ($files) {
-            Write-Error "gofmt required:`n$files"
+            Write-Error ("gofmt required:`n" + ($files -join "`n"))
+            exit 1
           }
 
       - name: Test
