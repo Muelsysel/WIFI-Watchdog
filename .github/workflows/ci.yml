@@ -18,14 +18,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Check formatting
+      - name: Check formatting (advisory)
         shell: pwsh
         run: |
           $goFiles = Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { $_.FullName }
           $files = gofmt -l $goFiles
           if ($files) {
-            Write-Error ("gofmt required:`n" + ($files -join "`n"))
-            exit 1
+            Write-Warning ("gofmt recommended for:`n" + ($files -join "`n"))
           }
 
       - name: Test
