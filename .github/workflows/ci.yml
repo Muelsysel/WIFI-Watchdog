@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $files = gofmt -l *.go
+          if ($files) {
+            Write-Error "gofmt required:`n$files"
+          }
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Windows amd64
+        run: go build -trimpath -ldflags "-H=windowsgui" -o WiFiWatchdog.exe .
