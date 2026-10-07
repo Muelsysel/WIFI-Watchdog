@@ -14,4 +14,6 @@ WiFi Watchdog 不包含遥测、账号系统或云端上传功能。
 
 程序不会读取或保存 Wi‑Fi / 802.1X 密码。
 
-诊断报告只写入 `%LOCALAPPDATA%\WiFiWatchdog`。如果你把诊断报告上传到 GitHub Issue，请先检查并脱敏。
+运行日志按天写入 `%LOCALAPPDATA%\WiFiWatchdog\logs\`，默认保留 30 天；诊断报告写入 `%LOCALAPPDATA%\WiFiWatchdog\diagnostics\`，并使用同一保留窗口自动清理。
+
+如果你把诊断报告上传到 GitHub Issue，请先检查并脱敏。报告会明确提示其中可能包含 SSID/Profile、私有 IP、路由和网卡信息。

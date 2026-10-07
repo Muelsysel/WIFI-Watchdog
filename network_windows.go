@@ -32,8 +32,10 @@ type HTTPProbeDetail struct {
 
 type SystemProbeResult struct {
 	Online             bool
+	HTTPAttempted      int
 	ValidHTTP          int
 	ReachedHTTP        int
+	TCPAttempted       int
 	TCPFallbackSuccess int
 	CaptiveSuspected   bool
 	Details            []HTTPProbeDetail
@@ -65,6 +67,7 @@ type NetworkAssessment struct {
 	WiFi             wifiInfo
 	System           SystemProbeResult
 	VPN              VPNStatus
+	DeepChecked      bool
 	Underlay         WiFiUnderlayStatus
 	Online           bool
 	ShouldRepairWiFi bool
@@ -168,7 +171,7 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 		go func() { ch <- probeHTTP(ctx, client, t.name, t.url, t.v) }()
 	}
 
-	r := SystemProbeResult{Details: make([]HTTPProbeDetail, 0, len(targets))}
+	r := SystemProbeResult{HTTPAttempted: len(targets), Details: make([]HTTPProbeDetail, 0, len(targets))}
 	plainUnexpected := false
 	for range targets {
 		d := <-ch
@@ -178,23 +181,22 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 		}
 		if d.Valid {
 			r.ValidHTTP++
+			r.Online = true
+			// A single validated public response is already strong proof of usable
+			// system Internet. Cancel slower endpoints (for example a blocked
+			// regional target) instead of making every healthy check wait for them.
+			cancel()
+			return r
 		}
 		if d.Reached && !d.Valid && (d.Name == "Microsoft-NCSI" || d.Name == "Google-204") {
 			plainUnexpected = true
 		}
 	}
 
-	// Any validated public HTTP/HTTPS response is strong proof that the system
-	// has usable internet. This is intentionally conservative against invasive
-	// Wi-Fi repair: one real successful endpoint is enough.
-	if r.ValidHTTP > 0 {
-		r.Online = true
-		return r
-	}
-
 	// If HTTP is filtered but raw public TCP is reachable, still prefer a
 	// false-negative-avoiding "online/degraded" result over resetting Wi-Fi.
 	tcpTargets := []string{"1.1.1.1:443", "223.5.5.5:53"}
+	r.TCPAttempted = len(tcpTargets)
 	tcpCh := make(chan bool, len(tcpTargets))
 	for _, addr := range tcpTargets {
 		addr := addr
@@ -212,11 +214,11 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 	for range tcpTargets {
 		if <-tcpCh {
 			r.TCPFallbackSuccess++
+			r.Online = true
+			return r
 		}
 	}
-	if r.TCPFallbackSuccess > 0 {
-		r.Online = true
-	} else if plainUnexpected {
+	if plainUnexpected {
 		r.CaptiveSuspected = true
 	}
 	return r
@@ -233,8 +235,8 @@ func (a *App) logSystemProbe(r SystemProbeResult) {
 		}
 		parts = append(parts, fmt.Sprintf("%s=%s", d.Name, state))
 	}
-	a.logger.info(fmt.Sprintf("系统互联网探测：HTTP有效=%d/%d，TCP兜底=%d/2，Online=%v；%s",
-		r.ValidHTTP, len(r.Details), r.TCPFallbackSuccess, r.Online, strings.Join(parts, ", ")))
+	a.logger.info(fmt.Sprintf("系统互联网探测：HTTP有效=%d/%d，TCP兜底=%d/%d，Online=%v；%s",
+		r.ValidHTTP, r.HTTPAttempted, r.TCPFallbackSuccess, r.TCPAttempted, r.Online, strings.Join(parts, ", ")))
 }
 
 func localPortOpen(port int, timeout time.Duration) bool {
@@ -364,6 +366,34 @@ func vpnAdapterHints(wifiAlias string) []string {
 	return out
 }
 
+func vpnAdapterDescriptionHints(wifiAlias string) []string {
+	script := `$ErrorActionPreference='SilentlyContinue'; Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "$($_.Name)$([char]9)$($_.InterfaceDescription)$([char]9)$($_.ifIndex)" }`
+	out, err := powershellEncoded(script, 6*time.Second)
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	var hints []string
+	for _, raw := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
+		fields := strings.Split(strings.TrimSpace(raw), "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		description := strings.TrimSpace(fields[1])
+		if strings.EqualFold(name, strings.TrimSpace(wifiAlias)) {
+			continue
+		}
+		if vpnNameRE.MatchString(name + " " + description) {
+			ifIndex := ""
+			if len(fields) >= 3 {
+				ifIndex = strings.TrimSpace(fields[2])
+			}
+			hints = append(hints, fmt.Sprintf("adapter-description:%s/%s(ifIndex=%s)", name, description, ifIndex))
+		}
+	}
+	return hints
+}
+
 func vpnRouteHints() []string {
 	out, err := runHiddenTimeout(8*time.Second, "route.exe", "print", "-4")
 	if err != nil && len(out) == 0 {
@@ -413,6 +443,9 @@ func (a *App) detectVPNStatus(wifi wifiInfo) VPNStatus {
 		}
 	}
 	v.AdapterHints = vpnAdapterHints(wifi.InterfaceName)
+	if len(v.AdapterHints) == 0 {
+		v.AdapterHints = vpnAdapterDescriptionHints(wifi.InterfaceName)
+	}
 	v.RouteHints = vpnRouteHints()
 	v.Signals = append(v.Signals, v.AdapterHints...)
 	v.Signals = append(v.Signals, v.RouteHints...)
@@ -559,40 +592,22 @@ func (a *App) assessWiFiUnderlay(wifi wifiInfo) WiFiUnderlayStatus {
 	return u
 }
 
-func (a *App) assessNetwork() NetworkAssessment {
-	// 网络判定会调用 route/arp/ping/HTTP 等多个系统接口。串行化评估，
-	// 避免监控循环、设置页刷新和手动检测同时启动多组探测造成拥塞。
-	a.assessmentMu.Lock()
-	defer a.assessmentMu.Unlock()
-
-	n := NetworkAssessment{}
-	n.WiFi = detectWifi()
-	n.System = a.systemInternetProbe()
-	a.logSystemProbe(n.System)
+func classifyNetworkAssessment(n *NetworkAssessment) {
 	if n.System.Online {
 		n.Online = true
 		n.Reason = "系统互联网可用"
-		return n
+		return
 	}
-
-	n.VPN = a.detectVPNStatus(n.WiFi)
-	if n.VPN.Detected {
-		a.logger.info("检测到 VPN/TUN 信号：" + strings.Join(n.VPN.Signals, "; "))
-	}
-
 	if !n.WiFi.Connected {
 		n.ShouldRepairWiFi = true
 		n.Reason = "系统无网且 Wi-Fi 未关联"
-		return n
+		return
 	}
-
-	n.Underlay = a.assessWiFiUnderlay(n.WiFi)
 	if n.System.CaptiveSuspected && !n.Underlay.StrongFault {
 		n.CaptiveProtected = true
 		n.Reason = "疑似认证门户/受限网络，避免自动重启 Wi-Fi"
-		return n
+		return
 	}
-
 	if n.VPN.Detected && !n.Underlay.StrongFault {
 		n.VPNProtected = true
 		if n.VPN.ProxyUpstreamOK {
@@ -600,19 +615,61 @@ func (a *App) assessNetwork() NetworkAssessment {
 		} else {
 			n.Reason = "系统互联网异常，但检测到 VPN/TUN 且 Wi-Fi 底层未发现强故障证据"
 		}
-		return n
+		return
 	}
-
 	if n.VPN.Detected && n.Underlay.StrongFault {
 		n.ShouldRepairWiFi = true
 		n.Reason = "VPN/TUN 存在，但 Wi-Fi 底层存在强故障证据：" + n.Underlay.Reason
+		return
+	}
+
+	// No VPN/TUN evidence: preserve the watchdog behavior. A confirmed system
+	// internet failure is enough to allow recovery, but the multi-stage repair
+	// still starts from the least invasive operation.
+	n.ShouldRepairWiFi = true
+	n.Reason = "系统互联网不可用且未检测到 VPN/TUN 保护条件"
+}
+
+func fastNativeWifiSnapshot() wifiInfo {
+	info, err := detectWifiNative()
+	if err != nil {
+		return wifiInfo{}
+	}
+	return info
+}
+
+func (a *App) assessNetwork() NetworkAssessment {
+	// Heavy assessment is serialized so the monitor loop, settings page and
+	// manual checks cannot stampede route/ARP/ping/HTTP probes.
+	a.assessmentMu.Lock()
+	defer a.assessmentMu.Unlock()
+
+	n := NetworkAssessment{}
+
+	// Fast path first: when Windows really has usable Internet, there is no need
+	// to run netsh/route/ARP/underlay probes at all. This dramatically shortens
+	// the common path and removes a major source of perceived UI "hangs".
+	n.System = a.systemInternetProbe()
+	a.logSystemProbe(n.System)
+	if n.System.Online {
+		n.WiFi = fastNativeWifiSnapshot()
+		classifyNetworkAssessment(&n)
 		return n
 	}
 
-	// No VPN/TUN evidence: preserve the original watchdog behavior. A real
-	// system internet failure after confirmation is enough to attempt repair.
-	n.ShouldRepairWiFi = true
-	n.Reason = "系统互联网不可用且未检测到 VPN/TUN 保护条件"
+	// Only enter the expensive/deep path after the system-level Internet probe
+	// has actually failed.
+	n.DeepChecked = true
+	n.WiFi = detectWifi()
+	n.VPN = a.detectVPNStatus(n.WiFi)
+	if n.VPN.Detected {
+		a.logger.info("检测到 VPN/TUN 信号：" + strings.Join(n.VPN.Signals, "; "))
+	}
+
+	if n.WiFi.Connected {
+		n.Underlay = a.assessWiFiUnderlay(n.WiFi)
+	}
+	classifyNetworkAssessment(&n)
 	return n
 }
 

@@ -9,9 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -126,6 +129,8 @@ const (
 	ID_BUTTON_REFRESH       = 2017
 	ID_BUTTON_DEFAULTS      = 2018
 	ID_BUTTON_DIAG          = 2019
+	ID_EDIT_TIMEOUT_SECONDS = 2020
+	ID_EDIT_LOG_RETENTION   = 2021
 )
 
 type point struct {
@@ -200,6 +205,7 @@ var (
 	procGetMessageW          = user32.NewProc("GetMessageW")
 	procTranslateMessage     = user32.NewProc("TranslateMessage")
 	procDispatchMessageW     = user32.NewProc("DispatchMessageW")
+	procIsDialogMessageW     = user32.NewProc("IsDialogMessageW")
 	procPostQuitMessage      = user32.NewProc("PostQuitMessage")
 	procPostMessageW         = user32.NewProc("PostMessageW")
 	procLoadIconW            = user32.NewProc("LoadIconW")
@@ -227,6 +233,7 @@ var (
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	procCreateMutexW     = kernel32.NewProc("CreateMutexW")
 	procCloseHandle      = kernel32.NewProc("CloseHandle")
+	procMoveFileExW      = kernel32.NewProc("MoveFileExW")
 
 	procGetStockObject = gdi32.NewProc("GetStockObject")
 )
@@ -269,6 +276,7 @@ type Config struct {
 	EnableWlanServiceRestart    bool `json:"enableWlanServiceRestart"`
 	EnableVPNAware              bool `json:"enableVpnAware"`
 	VPNLocalPort                int  `json:"vpnLocalPort"`
+	LogRetentionDays            int  `json:"logRetentionDays"`
 	StartWithWindows            bool `json:"startWithWindows"`
 }
 
@@ -287,7 +295,8 @@ func defaultConfig() Config {
 		AutoReconnectDisconnected:   false,
 		EnableWlanServiceRestart:    false,
 		EnableVPNAware:              true,
-		VPNLocalPort:                2026,
+		VPNLocalPort:                0,
+		LogRetentionDays:            30,
 		StartWithWindows:            false,
 	}
 }
@@ -304,6 +313,7 @@ func normalizeConfig(c Config) Config {
 	c.ConnectRetryDelaySeconds = clamp(c.ConnectRetryDelaySeconds, 1, 60)
 	c.DHCPRenewWaitSeconds = clamp(c.DHCPRenewWaitSeconds, 1, 120)
 	c.VPNLocalPort = clamp(c.VPNLocalPort, 0, 65535)
+	c.LogRetentionDays = clamp(c.LogRetentionDays, 1, 3650)
 	return c
 }
 
@@ -318,27 +328,86 @@ func clamp(v, minV, maxV int) int {
 }
 
 type Logger struct {
-	path string
-	mu   sync.Mutex
+	dir            string
+	mu             sync.Mutex
+	retentionDays  int
+	lastCleanupDay string
+}
+
+func newLogger(dir string, retentionDays int) *Logger {
+	return &Logger{dir: dir, retentionDays: clamp(retentionDays, 1, 3650)}
+}
+
+func (l *Logger) setRetentionDays(days int) {
+	l.mu.Lock()
+	l.retentionDays = clamp(days, 1, 3650)
+	// Force a new cleanup pass so reducing the retention applies immediately.
+	l.lastCleanupDay = ""
+	l.mu.Unlock()
+}
+
+func (l *Logger) currentPathLocked(now time.Time) string {
+	return filepath.Join(l.dir, "watchdog-"+now.Format("2006-01-02")+".log")
+}
+
+func (l *Logger) currentPath() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_ = os.MkdirAll(l.dir, 0755)
+	return l.currentPathLocked(time.Now())
+}
+
+func (l *Logger) cleanupLocked(now time.Time) {
+	dayKey := now.Format("2006-01-02")
+	if l.lastCleanupDay == dayKey {
+		return
+	}
+	l.lastCleanupDay = dayKey
+	retention := l.retentionDays
+	if retention <= 0 {
+		retention = 30
+	}
+	entries, err := os.ReadDir(l.dir)
+	if err != nil {
+		return
+	}
+	today, _ := time.ParseInLocation("2006-01-02", dayKey, now.Location())
+	cutoff := today.AddDate(0, 0, -(retention - 1))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "watchdog-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		dateText := strings.TrimSuffix(strings.TrimPrefix(name, "watchdog-"), ".log")
+		logDay, err := time.ParseInLocation("2006-01-02", dateText, now.Location())
+		if err != nil {
+			continue
+		}
+		if logDay.Before(cutoff) {
+			_ = os.Remove(filepath.Join(l.dir, name))
+		}
+	}
 }
 
 func (l *Logger) write(level, text string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Rotate at ~5 MiB so unattended use cannot grow the log without bound.
-	if st, err := os.Stat(l.path); err == nil && st.Size() > 5*1024*1024 {
-		backup := l.path + ".1"
-		_ = os.Remove(backup)
-		_ = os.Rename(l.path, backup)
+	now := time.Now()
+	if err := os.MkdirAll(l.dir, 0755); err != nil {
+		return
 	}
-
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	l.cleanupLocked(now)
+	path := l.currentPathLocked(now)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "[%s] [%s] %s\r\n", time.Now().Format("2006-01-02 15:04:05"), level, text)
+	fmt.Fprintf(f, "[%s] [%s] %s\r\n", now.Format("2006-01-02 15:04:05"), level, text)
 }
 
 func (l *Logger) info(s string) { l.write("INFO", s) }
@@ -369,7 +438,7 @@ type App struct {
 	nid  notifyIconData
 
 	configPath string
-	logPath    string
+	logDir     string
 	dataDir    string
 
 	cfgMu sync.RWMutex
@@ -389,12 +458,14 @@ type App struct {
 	repairMu     sync.Mutex
 	assessmentMu sync.Mutex
 	stateMu      sync.Mutex
+	workers      sync.WaitGroup
 
 	settingsMu   sync.Mutex
 	settingsHwnd uintptr
 
 	shownStartupBalloon bool
 	mutexHandle         uintptr
+	statusPostPending   atomic.Bool
 }
 
 var app *App
@@ -406,9 +477,13 @@ func (a *App) getConfig() Config {
 }
 
 func (a *App) setConfig(c Config) {
+	normalized := normalizeConfig(c)
 	a.cfgMu.Lock()
-	a.cfg = normalizeConfig(c)
+	a.cfg = normalized
 	a.cfgMu.Unlock()
+	if a.logger != nil {
+		a.logger.setRetentionDays(normalized.LogRetentionDays)
+	}
 }
 
 func (a *App) saveConfig(c Config) error {
@@ -427,6 +502,8 @@ func loadConfig(path string) Config {
 		return c
 	}
 	if json.Unmarshal(b, &c) != nil {
+		backup := path + ".invalid-" + time.Now().Format("20060102-150405") + ".json"
+		_ = os.Rename(path, backup)
 		return defaultConfig()
 	}
 	return normalizeConfig(c)
@@ -449,7 +526,9 @@ func (a *App) setStatus(state MonitorState, text string, logIt bool) {
 			a.logger.info(text)
 		}
 	}
-	procPostMessageW.Call(a.hwnd, WM_STATUS_UPDATE, 0, 0)
+	if a.statusPostPending.CompareAndSwap(false, true) {
+		procPostMessageW.Call(a.hwnd, WM_STATUS_UPDATE, 0, 0)
+	}
 }
 
 func (a *App) currentStatus() (MonitorState, string) {
@@ -467,6 +546,34 @@ func (a *App) wake() {
 
 func (a *App) stop() {
 	a.onceStop.Do(func() { close(a.stopCh) })
+}
+
+func (a *App) reportRecoveredPanic(scope string, recovered any) {
+	stack := debug.Stack()
+	msg := fmt.Sprintf("%s panic: %v", scope, recovered)
+	if a.logger != nil {
+		a.logger.err(msg + "\r\n" + string(stack))
+	}
+	dir := filepath.Join(a.dataDir, "diagnostics")
+	_ = os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, "crash-"+time.Now().Format("20060102-150405")+".txt")
+	body := fmt.Sprintf("WiFi Watchdog crash report\r\nVersion: %s\r\nScope: %s\r\nTime: %s\r\nPanic: %v\r\n\r\n%s",
+		appVersion, scope, time.Now().Format(time.RFC3339), recovered, stack)
+	_ = atomicWriteFile(path, []byte(body), 0644)
+	a.setStatus(StateError, "后台任务异常已被隔离，程序继续运行；崩溃报告："+path, true)
+}
+
+func (a *App) goSafe(scope string, fn func()) {
+	a.workers.Add(1)
+	go func() {
+		defer a.workers.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				a.reportRecoveredPanic(scope, recovered)
+			}
+		}()
+		fn()
+	}()
 }
 
 func (a *App) delayOrWake(d time.Duration) bool {
@@ -1002,6 +1109,8 @@ func (a *App) addTrayIcon() bool {
 }
 
 func (a *App) updateTray() {
+	// Clear first: a concurrent status change can then queue a fresh update.
+	a.statusPostPending.Store(false)
 	state, status := a.currentStatus()
 	a.nid.UFlags = NIF_ICON | NIF_TIP
 	a.nid.HIcon = stateIcon(state)
@@ -1080,25 +1189,26 @@ func (a *App) showTrayMenu() {
 func (a *App) handleMenuCommand(id int) {
 	switch id {
 	case ID_MENU_CHECK:
-		go a.manualCheck()
+		a.goSafe("manual-check", a.manualCheck)
 	case ID_MENU_CONNECT:
-		go a.manualConnectTarget()
+		a.goSafe("manual-connect", a.manualConnectTarget)
 	case ID_MENU_REPAIR:
-		go a.manualRepair()
+		a.goSafe("manual-repair", a.manualRepair)
 	case ID_MENU_REMEMBER:
-		a.manualRememberTarget()
+		a.goSafe("remember-target", a.manualRememberTarget)
 	case ID_MENU_SETTINGS:
 		a.showSettings()
 	case ID_MENU_LOG:
-		if _, err := os.Stat(a.logPath); os.IsNotExist(err) {
-			_ = os.WriteFile(a.logPath, []byte{}, 0644)
+		path := a.logger.currentPath()
+		if f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+			_ = f.Close()
 		}
-		_ = exec.Command("notepad.exe", a.logPath).Start()
+		_ = exec.Command("notepad.exe", path).Start()
 	case ID_MENU_DIAG:
-		go func() {
+		a.goSafe("diagnostics", func() {
 			path := a.generateDiagnosticReport()
 			_ = exec.Command("notepad.exe", path).Start()
-		}()
+		})
 	case ID_MENU_DATA:
 		_ = exec.Command("explorer.exe", a.dataDir).Start()
 	case ID_MENU_EXIT:
@@ -1126,6 +1236,7 @@ type settingsControls struct {
 	vpnAware      uintptr
 	saveButton    uintptr
 	cancelButton  uintptr
+	refreshButton uintptr
 	statusLine    uintptr
 	summarySystem uintptr
 	summaryWiFi   uintptr
@@ -1207,7 +1318,7 @@ func (a *App) showSettings() {
 		0,
 		uintptr(unsafe.Pointer(wstr("WiFiWatchdog.Settings"))),
 		uintptr(unsafe.Pointer(wstr("WiFi Watchdog 控制中心 v"+appVersion))),
-		uintptr(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_VISIBLE),
+		uintptr(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU),
 		uintptr(x), uintptr(y), uintptr(width), uintptr(height),
 		0, 0, hInstance, 0,
 	)
@@ -1224,7 +1335,7 @@ func (a *App) showSettings() {
 	sc.summarySystem = createChild(hwnd, "STATIC", "系统互联网：正在后台刷新…", 0, 28, 46, 560, 22, 0)
 	sc.summaryWiFi = createChild(hwnd, "STATIC", "Wi-Fi：正在后台读取…", 0, 28, 72, 690, 22, 0)
 	sc.summaryVPN = createChild(hwnd, "STATIC", "VPN/TUN：正在后台检测…", 0, 28, 98, 690, 22, 0)
-	createChild(hwnd, "BUTTON", "刷新状态", BS_PUSHBUTTON|WS_TABSTOP, 596, 42, 74, 29, ID_BUTTON_REFRESH)
+	sc.refreshButton = createChild(hwnd, "BUTTON", "刷新状态", BS_PUSHBUTTON|WS_TABSTOP, 596, 42, 74, 29, ID_BUTTON_REFRESH)
 	createChild(hwnd, "BUTTON", "诊断报告", BS_PUSHBUTTON|WS_TABSTOP, 676, 42, 74, 29, ID_BUTTON_DIAG)
 	createChild(hwnd, "STATIC", "状态刷新、计划任务查询和配置保存都在后台执行，不会再阻塞窗口消息循环。", 0, 28, 126, 700, 22, 0)
 
@@ -1246,17 +1357,19 @@ func (a *App) showSettings() {
 		{"Profile 重试次数", ID_EDIT_CONNECT_RETRY, c.ConnectRetryCount, "次"},
 		{"每次连接等待", ID_EDIT_CONNECT_DELAY, c.ConnectRetryDelaySeconds, "秒"},
 		{"DHCP 更新等待", ID_EDIT_DHCP_WAIT, c.DHCPRenewWaitSeconds, "秒"},
-		{"VPN/TUN 本地端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=关闭"},
+		{"VPN/TUN 本地端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=不探测"},
+		{"单次探测超时", ID_EDIT_TIMEOUT_SECONDS, c.ConnectionTimeoutSeconds, "秒"},
+		{"日志保留时间", ID_EDIT_LOG_RETENTION, c.LogRetentionDays, "天"},
 	}
 
 	for i, r := range rows {
-		col := i / 5
-		rowIndex := i % 5
+		col := i / 6
+		rowIndex := i % 6
 		baseX := int32(28)
 		if col == 1 {
 			baseX = 398
 		}
-		yy := int32(202 + rowIndex*40)
+		yy := int32(202 + rowIndex*34)
 		createChild(hwnd, "STATIC", r.label, 0, baseX, yy+4, 150, 24, 0)
 		edit := createChild(hwnd, "EDIT", strconv.Itoa(r.value), WS_BORDER|WS_TABSTOP|ES_NUMBER, baseX+158, yy, 74, 27, r.id)
 		sc.edits[r.id] = edit
@@ -1286,6 +1399,9 @@ func (a *App) showSettings() {
 	a.settingsMu.Lock()
 	a.settingsHwnd = hwnd
 	a.settingsMu.Unlock()
+	// Build the full control tree while hidden, then show it once. This avoids
+	// repeated synchronous paints during construction on slower systems.
+	procShowWindow.Call(hwnd, SW_SHOW)
 	procSetForegroundWindow.Call(hwnd)
 	a.startSettingsRefresh(hwnd)
 }
@@ -1310,9 +1426,25 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	}
 	sc.refreshing = true
 	sc.mu.Unlock()
+	procEnableWindow.Call(sc.refreshButton, 0)
 	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
 
+	a.workers.Add(1)
 	go func() {
+		defer a.workers.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if v, ok := settingsMap.Load(hwnd); ok {
+					sc := v.(*settingsControls)
+					sc.mu.Lock()
+					sc.refreshing = false
+					sc.startupErr = fmt.Sprintf("后台刷新异常：%v", recovered)
+					sc.mu.Unlock()
+					procPostMessageW.Call(hwnd, WM_SETTINGS_REFRESH_DONE, 0, 0)
+				}
+				a.reportRecoveredPanic("settings-refresh", recovered)
+			}
+		}()
 		assessment := a.assessNetwork()
 		startupEnabled, startupErr := startupTaskEnabled()
 		v, ok := settingsMap.Load(hwnd)
@@ -1350,7 +1482,13 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 	startupErr := sc.startupErr
 	startupTouched := sc.startupTouched
 	sc.mu.Unlock()
+	procEnableWindow.Call(sc.refreshButton, 1)
 	if !ready {
+		if startupErr != "" {
+			setControlText(sc.statusLine, "状态刷新失败："+startupErr)
+		} else {
+			setControlText(sc.statusLine, "状态刷新未完成，请稍后重试。")
+		}
 		return
 	}
 
@@ -1378,6 +1516,8 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 			detail = string([]rune(detail)[:75]) + "…"
 		}
 		setControlText(sc.summaryVPN, "VPN/TUN：已检测到 · "+detail)
+	} else if n.Online && !n.DeepChecked {
+		setControlText(sc.summaryVPN, "VPN/TUN：系统在线，未执行深度检测（无需影响 Wi-Fi 判定）")
 	} else {
 		setControlText(sc.summaryVPN, "VPN/TUN：未检测到明显信号")
 	}
@@ -1422,6 +1562,8 @@ func (a *App) collectSettings(hwnd uintptr) (Config, error) {
 		{ID_EDIT_CONNECT_DELAY, 1, 60, func(v int) { c.ConnectRetryDelaySeconds = v }},
 		{ID_EDIT_DHCP_WAIT, 1, 120, func(v int) { c.DHCPRenewWaitSeconds = v }},
 		{ID_EDIT_VPN_PORT, 0, 65535, func(v int) { c.VPNLocalPort = v }},
+		{ID_EDIT_TIMEOUT_SECONDS, 1, 30, func(v int) { c.ConnectionTimeoutSeconds = v }},
+		{ID_EDIT_LOG_RETENTION, 1, 3650, func(v int) { c.LogRetentionDays = v }},
 	}
 	for _, item := range values {
 		n, err := parse(item.id, item.minV, item.maxV)
@@ -1463,8 +1605,29 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 	setControlText(sc.statusLine, "正在后台保存设置；窗口仍可响应，不会阻塞 UI…")
 
 	old := a.getConfig()
+	a.workers.Add(1)
 	go func() {
+		defer a.workers.Done()
 		var saveErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				saveErr = fmt.Errorf("后台保存异常：%v", recovered)
+				a.reportRecoveredPanic("settings-save", recovered)
+			}
+			v, ok := settingsMap.Load(hwnd)
+			if !ok {
+				return
+			}
+			sc := v.(*settingsControls)
+			sc.mu.Lock()
+			if saveErr != nil {
+				sc.saveErr = saveErr.Error()
+			}
+			sc.saveInProgress = false
+			sc.pendingConfig = c
+			sc.mu.Unlock()
+			procPostMessageW.Call(hwnd, WM_SETTINGS_SAVE_DONE, 0, 0)
+		}()
 		startupChanged := c.StartWithWindows != old.StartWithWindows
 		if startupChanged {
 			saveErr = setStartupTask(c.StartWithWindows)
@@ -1475,19 +1638,6 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 				_ = setStartupTask(old.StartWithWindows)
 			}
 		}
-		v, ok := settingsMap.Load(hwnd)
-		if !ok {
-			return
-		}
-		sc := v.(*settingsControls)
-		sc.mu.Lock()
-		if saveErr != nil {
-			sc.saveErr = saveErr.Error()
-		}
-		sc.saveInProgress = false
-		sc.pendingConfig = c
-		sc.mu.Unlock()
-		procPostMessageW.Call(hwnd, WM_SETTINGS_SAVE_DONE, 0, 0)
 	}()
 }
 
@@ -1512,7 +1662,15 @@ func (a *App) finishSettingsSave(hwnd uintptr) {
 	a.setConfig(c)
 	a.logger.info("设置已保存，监控循环将立即应用新参数。")
 	a.wake()
-	procDestroyWindow.Call(hwnd)
+	procEnableWindow.Call(sc.saveButton, 1)
+	procEnableWindow.Call(sc.cancelButton, 1)
+	setControlText(sc.saveButton, "保存")
+	sc.mu.Lock()
+	sc.startupKnown = true
+	sc.startupEnabled = c.StartWithWindows
+	sc.startupTouched = false
+	sc.mu.Unlock()
+	setControlText(sc.statusLine, "设置已保存并立即生效；窗口保持打开，可继续调整。")
 }
 
 func (a *App) restoreSettingsDefaults(hwnd uintptr) {
@@ -1533,6 +1691,8 @@ func (a *App) restoreSettingsDefaults(hwnd uintptr) {
 		ID_EDIT_CONNECT_DELAY:   d.ConnectRetryDelaySeconds,
 		ID_EDIT_DHCP_WAIT:       d.DHCPRenewWaitSeconds,
 		ID_EDIT_VPN_PORT:        d.VPNLocalPort,
+		ID_EDIT_TIMEOUT_SECONDS: d.ConnectionTimeoutSeconds,
+		ID_EDIT_LOG_RETENTION:   d.LogRetentionDays,
 	}
 	for id, value := range values {
 		setControlText(sc.edits[id], strconv.Itoa(value))
@@ -1572,10 +1732,10 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			return 0
 		case ID_BUTTON_DIAG:
 			if app != nil {
-				go func() {
+				app.goSafe("settings-diagnostics", func() {
 					path := app.generateDiagnosticReport()
 					_ = exec.Command("notepad.exe", path).Start()
-				}()
+				})
 			}
 			return 0
 		case ID_CHECK_STARTUP:
@@ -1732,7 +1892,7 @@ func createSingletonMutex() (uintptr, bool) {
 	return h, true
 }
 
-func ensureDataDir() (dataDir, configPath, logPath string, err error) {
+func ensureDataDir() (dataDir, configPath, logDir string, err error) {
 	base := os.Getenv("LOCALAPPDATA")
 	if base == "" {
 		home, e := os.UserHomeDir()
@@ -1746,11 +1906,35 @@ func ensureDataDir() (dataDir, configPath, logPath string, err error) {
 		return
 	}
 	configPath = filepath.Join(dataDir, "config.json")
-	logPath = filepath.Join(dataDir, "watchdog.log")
+	logDir = filepath.Join(dataDir, "logs")
+	if err = os.MkdirAll(logDir, 0755); err != nil {
+		return
+	}
 	return
 }
 
+func migrateLegacyLogs(dataDir, logDir string) {
+	legacy := []string{"watchdog.log", "watchdog.log.1"}
+	for _, name := range legacy {
+		src := filepath.Join(dataDir, name)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dst := filepath.Join(logDir, "legacy-"+name)
+		if _, err := os.Stat(dst); err == nil {
+			dst = filepath.Join(logDir, "legacy-"+time.Now().Format("20060102-150405")+"-"+name)
+		}
+		_ = os.Rename(src, dst)
+	}
+}
+
 func main() {
+	// Win32 windows and message queues are OS-thread-affine. Keep all UI creation
+	// and the message pump on one dedicated OS thread; goroutines must communicate
+	// back through PostMessage instead of touching the message loop.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	// 让原生 Win32 设置窗口在高 DPI / 125%-200% 缩放下保持清晰并减少布局错位。
 	procSetProcessDPIAware.Call()
 
@@ -1768,14 +1952,15 @@ func main() {
 	}
 	defer procCloseHandle.Call(mutexHandle)
 
-	dataDir, configPath, logPath, err := ensureDataDir()
+	dataDir, configPath, logDir, err := ensureDataDir()
 	if err != nil {
 		messageBox(0, "WiFi Watchdog", "无法创建数据目录：\r\n"+err.Error(), MB_OK|MB_ICONERROR)
 		return
 	}
 
-	logger := &Logger{path: logPath}
 	cfg := loadConfig(configPath)
+	migrateLegacyLogs(dataDir, logDir)
+	logger := newLogger(logDir, cfg.LogRetentionDays)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if b, e := json.MarshalIndent(cfg, "", "  "); e == nil {
 			_ = os.WriteFile(configPath, b, 0644)
@@ -1804,7 +1989,7 @@ func main() {
 	app = &App{
 		hwnd:        hwnd,
 		configPath:  configPath,
-		logPath:     logPath,
+		logDir:      logDir,
 		dataDir:     dataDir,
 		cfg:         cfg,
 		logger:      logger,
@@ -1822,7 +2007,7 @@ func main() {
 	}
 
 	logger.info("WiFi Watchdog 程序启动。")
-	go app.monitorLoop()
+	app.goSafe("monitor-loop", app.monitorLoop)
 
 	var m msg
 	for {
@@ -1830,7 +2015,29 @@ func main() {
 		if int32(r) == -1 || r == 0 {
 			break
 		}
+		app.settingsMu.Lock()
+		settingsHwnd := app.settingsHwnd
+		app.settingsMu.Unlock()
+		if settingsHwnd != 0 {
+			if handled, _, _ := procIsDialogMessageW.Call(settingsHwnd, uintptr(unsafe.Pointer(&m))); handled != 0 {
+				continue
+			}
+		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+	}
+
+	// Give in-flight recovery workers a short grace period to finish critical
+	// cleanup (especially re-enabling an adapter/service) before process exit.
+	done := make(chan struct{})
+	go func() {
+		app.workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		logger.info("后台任务已安全结束。")
+	case <-time.After(15 * time.Second):
+		logger.warn("退出等待后台任务超过 15 秒，程序将结束。")
 	}
 }

@@ -18,9 +18,16 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Test and vet
+      - name: Format, test and vet
+        shell: pwsh
         run: |
-          go test ./...
+          $goFiles = Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { $_.FullName }
+          $unformatted = gofmt -l $goFiles
+          if ($unformatted) {
+            Write-Error ("gofmt required:`n" + ($unformatted -join "`n"))
+            exit 1
+          }
+          go test -count=1 -timeout 2m ./...
           go vet ./...
 
       - name: Build release archives
@@ -29,13 +36,23 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           $env:CGO_ENABLED = '0'
           $env:GOOS = 'windows'
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $ldflags = "-H=windowsgui -s -w -X main.appVersion=$version"
+          @(
+            "Version: $version"
+            "Tag: ${{ github.ref_name }}"
+            "Commit: ${{ github.sha }}"
+            "Go: $(go version)"
+            "Built: $(Get-Date -Format o)"
+          ) | Set-Content -Encoding utf8 dist/BUILDINFO.txt
 
           foreach ($arch in @('amd64', 'arm64')) {
             $env:GOARCH = $arch
             $folder = "dist/WiFiWatchdog-windows-$arch"
             New-Item -ItemType Directory -Force $folder | Out-Null
-            go build -trimpath -ldflags '-H=windowsgui -s -w' -o "$folder/WiFiWatchdog.exe" .
-            Copy-Item README.md, README_EN.md, LICENSE, CHANGELOG.md $folder
+            go build -trimpath -ldflags $ldflags -o "$folder/WiFiWatchdog.exe" .
+            Copy-Item README.md, README_EN.md, LICENSE, CHANGELOG.md, config.schema.json $folder
+            Copy-Item dist/BUILDINFO.txt $folder
             Compress-Archive -Path "$folder/*" -DestinationPath "dist/WiFiWatchdog-windows-$arch.zip" -Force
           }
 
