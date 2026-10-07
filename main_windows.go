@@ -9,9 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -126,6 +128,8 @@ const (
 	ID_BUTTON_REFRESH       = 2017
 	ID_BUTTON_DEFAULTS      = 2018
 	ID_BUTTON_DIAG          = 2019
+	ID_EDIT_TIMEOUT_SECONDS  = 2020
+	ID_EDIT_LOG_RETENTION    = 2021
 )
 
 type point struct {
@@ -269,6 +273,7 @@ type Config struct {
 	EnableWlanServiceRestart    bool `json:"enableWlanServiceRestart"`
 	EnableVPNAware              bool `json:"enableVpnAware"`
 	VPNLocalPort                int  `json:"vpnLocalPort"`
+	LogRetentionDays            int  `json:"logRetentionDays"`
 	StartWithWindows            bool `json:"startWithWindows"`
 }
 
@@ -288,6 +293,7 @@ func defaultConfig() Config {
 		EnableWlanServiceRestart:    false,
 		EnableVPNAware:              true,
 		VPNLocalPort:                2026,
+		LogRetentionDays:            30,
 		StartWithWindows:            false,
 	}
 }
@@ -304,6 +310,7 @@ func normalizeConfig(c Config) Config {
 	c.ConnectRetryDelaySeconds = clamp(c.ConnectRetryDelaySeconds, 1, 60)
 	c.DHCPRenewWaitSeconds = clamp(c.DHCPRenewWaitSeconds, 1, 120)
 	c.VPNLocalPort = clamp(c.VPNLocalPort, 0, 65535)
+	c.LogRetentionDays = clamp(c.LogRetentionDays, 1, 3650)
 	return c
 }
 
@@ -318,27 +325,86 @@ func clamp(v, minV, maxV int) int {
 }
 
 type Logger struct {
-	path string
-	mu   sync.Mutex
+	dir            string
+	mu             sync.Mutex
+	retentionDays  int
+	lastCleanupDay string
+}
+
+func newLogger(dir string, retentionDays int) *Logger {
+	return &Logger{dir: dir, retentionDays: clamp(retentionDays, 1, 3650)}
+}
+
+func (l *Logger) setRetentionDays(days int) {
+	l.mu.Lock()
+	l.retentionDays = clamp(days, 1, 3650)
+	// Force a new cleanup pass so reducing the retention applies immediately.
+	l.lastCleanupDay = ""
+	l.mu.Unlock()
+}
+
+func (l *Logger) currentPathLocked(now time.Time) string {
+	return filepath.Join(l.dir, "watchdog-"+now.Format("2006-01-02")+".log")
+}
+
+func (l *Logger) currentPath() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_ = os.MkdirAll(l.dir, 0755)
+	return l.currentPathLocked(time.Now())
+}
+
+func (l *Logger) cleanupLocked(now time.Time) {
+	dayKey := now.Format("2006-01-02")
+	if l.lastCleanupDay == dayKey {
+		return
+	}
+	l.lastCleanupDay = dayKey
+	retention := l.retentionDays
+	if retention <= 0 {
+		retention = 30
+	}
+	entries, err := os.ReadDir(l.dir)
+	if err != nil {
+		return
+	}
+	today, _ := time.ParseInLocation("2006-01-02", dayKey, now.Location())
+	cutoff := today.AddDate(0, 0, -(retention - 1))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "watchdog-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		dateText := strings.TrimSuffix(strings.TrimPrefix(name, "watchdog-"), ".log")
+		logDay, err := time.ParseInLocation("2006-01-02", dateText, now.Location())
+		if err != nil {
+			continue
+		}
+		if logDay.Before(cutoff) {
+			_ = os.Remove(filepath.Join(l.dir, name))
+		}
+	}
 }
 
 func (l *Logger) write(level, text string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Rotate at ~5 MiB so unattended use cannot grow the log without bound.
-	if st, err := os.Stat(l.path); err == nil && st.Size() > 5*1024*1024 {
-		backup := l.path + ".1"
-		_ = os.Remove(backup)
-		_ = os.Rename(l.path, backup)
+	now := time.Now()
+	if err := os.MkdirAll(l.dir, 0755); err != nil {
+		return
 	}
-
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	l.cleanupLocked(now)
+	path := l.currentPathLocked(now)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "[%s] [%s] %s\r\n", time.Now().Format("2006-01-02 15:04:05"), level, text)
+	fmt.Fprintf(f, "[%s] [%s] %s\r\n", now.Format("2006-01-02 15:04:05"), level, text)
 }
 
 func (l *Logger) info(s string) { l.write("INFO", s) }
@@ -369,7 +435,7 @@ type App struct {
 	nid  notifyIconData
 
 	configPath string
-	logPath    string
+	logDir     string
 	dataDir    string
 
 	cfgMu sync.RWMutex
@@ -395,6 +461,7 @@ type App struct {
 
 	shownStartupBalloon bool
 	mutexHandle         uintptr
+	statusPostPending   atomic.Bool
 }
 
 var app *App
@@ -406,9 +473,13 @@ func (a *App) getConfig() Config {
 }
 
 func (a *App) setConfig(c Config) {
+	normalized := normalizeConfig(c)
 	a.cfgMu.Lock()
-	a.cfg = normalizeConfig(c)
+	a.cfg = normalized
 	a.cfgMu.Unlock()
+	if a.logger != nil {
+		a.logger.setRetentionDays(normalized.LogRetentionDays)
+	}
 }
 
 func (a *App) saveConfig(c Config) error {
@@ -449,7 +520,9 @@ func (a *App) setStatus(state MonitorState, text string, logIt bool) {
 			a.logger.info(text)
 		}
 	}
-	procPostMessageW.Call(a.hwnd, WM_STATUS_UPDATE, 0, 0)
+	if a.statusPostPending.CompareAndSwap(false, true) {
+		procPostMessageW.Call(a.hwnd, WM_STATUS_UPDATE, 0, 0)
+	}
 }
 
 func (a *App) currentStatus() (MonitorState, string) {
@@ -1002,6 +1075,8 @@ func (a *App) addTrayIcon() bool {
 }
 
 func (a *App) updateTray() {
+	// Clear first: a concurrent status change can then queue a fresh update.
+	a.statusPostPending.Store(false)
 	state, status := a.currentStatus()
 	a.nid.UFlags = NIF_ICON | NIF_TIP
 	a.nid.HIcon = stateIcon(state)
@@ -1086,14 +1161,15 @@ func (a *App) handleMenuCommand(id int) {
 	case ID_MENU_REPAIR:
 		go a.manualRepair()
 	case ID_MENU_REMEMBER:
-		a.manualRememberTarget()
+		go a.manualRememberTarget()
 	case ID_MENU_SETTINGS:
 		a.showSettings()
 	case ID_MENU_LOG:
-		if _, err := os.Stat(a.logPath); os.IsNotExist(err) {
-			_ = os.WriteFile(a.logPath, []byte{}, 0644)
+		path := a.logger.currentPath()
+		if f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+			_ = f.Close()
 		}
-		_ = exec.Command("notepad.exe", a.logPath).Start()
+		_ = exec.Command("notepad.exe", path).Start()
 	case ID_MENU_DIAG:
 		go func() {
 			path := a.generateDiagnosticReport()
@@ -1247,16 +1323,18 @@ func (a *App) showSettings() {
 		{"每次连接等待", ID_EDIT_CONNECT_DELAY, c.ConnectRetryDelaySeconds, "秒"},
 		{"DHCP 更新等待", ID_EDIT_DHCP_WAIT, c.DHCPRenewWaitSeconds, "秒"},
 		{"VPN/TUN 本地端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=关闭"},
+		{"单次探测超时", ID_EDIT_TIMEOUT_SECONDS, c.ConnectionTimeoutSeconds, "秒"},
+		{"日志保留时间", ID_EDIT_LOG_RETENTION, c.LogRetentionDays, "天"},
 	}
 
 	for i, r := range rows {
-		col := i / 5
-		rowIndex := i % 5
+		col := i / 6
+		rowIndex := i % 6
 		baseX := int32(28)
 		if col == 1 {
 			baseX = 398
 		}
-		yy := int32(202 + rowIndex*40)
+		yy := int32(202 + rowIndex*34)
 		createChild(hwnd, "STATIC", r.label, 0, baseX, yy+4, 150, 24, 0)
 		edit := createChild(hwnd, "EDIT", strconv.Itoa(r.value), WS_BORDER|WS_TABSTOP|ES_NUMBER, baseX+158, yy, 74, 27, r.id)
 		sc.edits[r.id] = edit
@@ -1422,6 +1500,8 @@ func (a *App) collectSettings(hwnd uintptr) (Config, error) {
 		{ID_EDIT_CONNECT_DELAY, 1, 60, func(v int) { c.ConnectRetryDelaySeconds = v }},
 		{ID_EDIT_DHCP_WAIT, 1, 120, func(v int) { c.DHCPRenewWaitSeconds = v }},
 		{ID_EDIT_VPN_PORT, 0, 65535, func(v int) { c.VPNLocalPort = v }},
+		{ID_EDIT_TIMEOUT_SECONDS, 1, 30, func(v int) { c.ConnectionTimeoutSeconds = v }},
+		{ID_EDIT_LOG_RETENTION, 1, 3650, func(v int) { c.LogRetentionDays = v }},
 	}
 	for _, item := range values {
 		n, err := parse(item.id, item.minV, item.maxV)
@@ -1512,7 +1592,15 @@ func (a *App) finishSettingsSave(hwnd uintptr) {
 	a.setConfig(c)
 	a.logger.info("设置已保存，监控循环将立即应用新参数。")
 	a.wake()
-	procDestroyWindow.Call(hwnd)
+	procEnableWindow.Call(sc.saveButton, 1)
+	procEnableWindow.Call(sc.cancelButton, 1)
+	setControlText(sc.saveButton, "保存")
+	sc.mu.Lock()
+	sc.startupKnown = true
+	sc.startupEnabled = c.StartWithWindows
+	sc.startupTouched = false
+	sc.mu.Unlock()
+	setControlText(sc.statusLine, "设置已保存并立即生效；窗口保持打开，可继续调整。")
 }
 
 func (a *App) restoreSettingsDefaults(hwnd uintptr) {
@@ -1533,6 +1621,8 @@ func (a *App) restoreSettingsDefaults(hwnd uintptr) {
 		ID_EDIT_CONNECT_DELAY:   d.ConnectRetryDelaySeconds,
 		ID_EDIT_DHCP_WAIT:       d.DHCPRenewWaitSeconds,
 		ID_EDIT_VPN_PORT:        d.VPNLocalPort,
+		ID_EDIT_TIMEOUT_SECONDS: d.ConnectionTimeoutSeconds,
+		ID_EDIT_LOG_RETENTION:   d.LogRetentionDays,
 	}
 	for id, value := range values {
 		setControlText(sc.edits[id], strconv.Itoa(value))
@@ -1732,7 +1822,7 @@ func createSingletonMutex() (uintptr, bool) {
 	return h, true
 }
 
-func ensureDataDir() (dataDir, configPath, logPath string, err error) {
+func ensureDataDir() (dataDir, configPath, logDir string, err error) {
 	base := os.Getenv("LOCALAPPDATA")
 	if base == "" {
 		home, e := os.UserHomeDir()
@@ -1746,11 +1836,35 @@ func ensureDataDir() (dataDir, configPath, logPath string, err error) {
 		return
 	}
 	configPath = filepath.Join(dataDir, "config.json")
-	logPath = filepath.Join(dataDir, "watchdog.log")
+	logDir = filepath.Join(dataDir, "logs")
+	if err = os.MkdirAll(logDir, 0755); err != nil {
+		return
+	}
 	return
 }
 
+func migrateLegacyLogs(dataDir, logDir string) {
+	legacy := []string{"watchdog.log", "watchdog.log.1"}
+	for _, name := range legacy {
+		src := filepath.Join(dataDir, name)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		dst := filepath.Join(logDir, "legacy-"+name)
+		if _, err := os.Stat(dst); err == nil {
+			dst = filepath.Join(logDir, "legacy-"+time.Now().Format("20060102-150405")+"-"+name)
+		}
+		_ = os.Rename(src, dst)
+	}
+}
+
 func main() {
+	// Win32 windows and message queues are OS-thread-affine. Keep all UI creation
+	// and the message pump on one dedicated OS thread; goroutines must communicate
+	// back through PostMessage instead of touching the message loop.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	// 让原生 Win32 设置窗口在高 DPI / 125%-200% 缩放下保持清晰并减少布局错位。
 	procSetProcessDPIAware.Call()
 
@@ -1768,14 +1882,15 @@ func main() {
 	}
 	defer procCloseHandle.Call(mutexHandle)
 
-	dataDir, configPath, logPath, err := ensureDataDir()
+	dataDir, configPath, logDir, err := ensureDataDir()
 	if err != nil {
 		messageBox(0, "WiFi Watchdog", "无法创建数据目录：\r\n"+err.Error(), MB_OK|MB_ICONERROR)
 		return
 	}
 
-	logger := &Logger{path: logPath}
 	cfg := loadConfig(configPath)
+	migrateLegacyLogs(dataDir, logDir)
+	logger := newLogger(logDir, cfg.LogRetentionDays)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if b, e := json.MarshalIndent(cfg, "", "  "); e == nil {
 			_ = os.WriteFile(configPath, b, 0644)
@@ -1804,7 +1919,7 @@ func main() {
 	app = &App{
 		hwnd:        hwnd,
 		configPath:  configPath,
-		logPath:     logPath,
+		logDir:      logDir,
 		dataDir:     dataDir,
 		cfg:         cfg,
 		logger:      logger,
