@@ -16,7 +16,7 @@ import (
 	"unicode/utf16"
 )
 
-const appVersion = "1.3.0"
+var appVersion = "1.4.0"
 
 type RecoveryTarget struct {
 	ProfileName          string    `json:"profileName"`
@@ -545,6 +545,10 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 		}
 	}
 
+	if a.hasInternet() {
+		a.logger.info("进入主动断开前检测到互联网已自行恢复，取消侵入式恢复。")
+		return true
+	}
 	a.logger.warn("恢复层 2：主动断开并重新连接保存的 WLAN Profile。")
 	if a.softReconnect(t) {
 		if a.hasInternet() {
@@ -555,6 +559,10 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 		}
 	}
 
+	if a.hasInternet() {
+		a.logger.info("进入网卡重启前检测到互联网已自行恢复，取消网卡重启。")
+		return true
+	}
 	a.logger.warn("恢复层 3：重启无线网卡，然后强制连接保存的 WLAN Profile。")
 	if a.restartAdapter(t) {
 		// The adapter alias can change after driver updates; refresh what we can.
@@ -623,14 +631,15 @@ func (a *App) manualConnectTarget() {
 }
 
 func (a *App) manualRememberTarget() {
+	a.setStatus(StateChecking, "正在后台读取当前 Wi-Fi 并保存恢复目标…", false)
 	info := detectWifi()
 	if !info.Connected {
-		messageBox(a.hwnd, "WiFi Watchdog", "当前没有连接 Wi-Fi，无法记住恢复目标。", MB_OK|MB_ICONWARNING)
+		a.setStatus(StateError, "当前没有连接 Wi-Fi，无法记住恢复目标。", true)
 		return
 	}
 	t := a.resolveTarget(info)
 	a.rememberTarget(t)
-	messageBox(a.hwnd, "WiFi Watchdog", fmt.Sprintf("已记住当前 Wi-Fi：\r\n\r\nProfile: %s\r\nSSID: %s", t.ProfileName, t.SSID), MB_OK|MB_ICONINFO)
+	a.setStatus(StateOnline, fmt.Sprintf("已记住恢复目标：Profile=%q，SSID=%q。", t.ProfileName, t.SSID), true)
 }
 
 func appendCommandReport(b *strings.Builder, title string, timeout time.Duration, name string, args ...string) {
@@ -645,13 +654,44 @@ func appendCommandReport(b *strings.Builder, title string, timeout time.Duration
 	}
 }
 
+func (a *App) diagnosticsDir() string {
+	return filepath.Join(a.dataDir, "diagnostics")
+}
+
+func (a *App) cleanupOldDiagnostics(now time.Time) {
+	dir := a.diagnosticsDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	retention := a.getConfig().LogRetentionDays
+	if retention <= 0 {
+		retention = 30
+	}
+	cutoff := now.AddDate(0, 0, -retention)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "diagnostics-") || !strings.HasSuffix(entry.Name(), ".txt") {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
+}
+
 func (a *App) generateDiagnosticReport() string {
-	name := "diagnostics-" + time.Now().Format("20060102-150405") + ".txt"
-	path := filepath.Join(a.dataDir, name)
+	now := time.Now()
+	dir := a.diagnosticsDir()
+	_ = os.MkdirAll(dir, 0755)
+	a.cleanupOldDiagnostics(now)
+	name := "diagnostics-" + now.Format("20060102-150405") + ".txt"
+	path := filepath.Join(dir, name)
 	var b strings.Builder
 	b.WriteString("WiFi Watchdog Diagnostics\r\n")
 	b.WriteString("Version: " + appVersion + "\r\n")
-	b.WriteString("Time: " + time.Now().Format(time.RFC3339) + "\r\n")
+	b.WriteString("Time: " + now.Format(time.RFC3339) + "\r\n")
+	b.WriteString("Privacy note: this report can contain SSID/Profile names, private IP addresses, routes, and adapter details. Review before sharing publicly.\r\n")
 	b.WriteString(fmt.Sprintf("Admin: %v\r\n", isAdmin()))
 	info := detectWifi()
 	b.WriteString(fmt.Sprintf("Native/merged Wi-Fi: %+v\r\n", info))
@@ -662,7 +702,7 @@ func (a *App) generateDiagnosticReport() string {
 	appendCommandReport(&b, "netsh wlan show profiles", 20*time.Second, "netsh.exe", "wlan", "show", "profiles")
 	appendCommandReport(&b, "ipconfig /all", 30*time.Second, "ipconfig.exe", "/all")
 	appendCommandReport(&b, "route print", 30*time.Second, "route.exe", "print")
-	b.WriteString("\r\n===== v1.3 VPN/TUN-aware assessment =====\r\n")
+	b.WriteString("\r\n===== v1.4 VPN/TUN-aware assessment =====\r\n")
 	assessment := a.assessNetwork()
 	ab, _ := json.MarshalIndent(assessment, "", "  ")
 	b.WriteString(string(ab) + "\r\n")
