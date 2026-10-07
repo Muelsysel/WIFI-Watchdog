@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -540,6 +541,32 @@ func (a *App) wake() {
 
 func (a *App) stop() {
 	a.onceStop.Do(func() { close(a.stopCh) })
+}
+
+func (a *App) reportRecoveredPanic(scope string, recovered any) {
+	stack := debug.Stack()
+	msg := fmt.Sprintf("%s panic: %v", scope, recovered)
+	if a.logger != nil {
+		a.logger.err(msg + "\r\n" + string(stack))
+	}
+	dir := filepath.Join(a.dataDir, "diagnostics")
+	_ = os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, "crash-"+time.Now().Format("20060102-150405")+".txt")
+	body := fmt.Sprintf("WiFi Watchdog crash report\r\nVersion: %s\r\nScope: %s\r\nTime: %s\r\nPanic: %v\r\n\r\n%s",
+		appVersion, scope, time.Now().Format(time.RFC3339), recovered, stack)
+	_ = atomicWriteFile(path, []byte(body), 0644)
+	a.setStatus(StateError, "后台任务异常已被隔离，程序继续运行；崩溃报告："+path, true)
+}
+
+func (a *App) goSafe(scope string, fn func()) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				a.reportRecoveredPanic(scope, recovered)
+			}
+		}()
+		fn()
+	}()
 }
 
 func (a *App) delayOrWake(d time.Duration) bool {
@@ -1155,13 +1182,13 @@ func (a *App) showTrayMenu() {
 func (a *App) handleMenuCommand(id int) {
 	switch id {
 	case ID_MENU_CHECK:
-		go a.manualCheck()
+		a.goSafe("manual-check", a.manualCheck)
 	case ID_MENU_CONNECT:
-		go a.manualConnectTarget()
+		a.goSafe("manual-connect", a.manualConnectTarget)
 	case ID_MENU_REPAIR:
-		go a.manualRepair()
+		a.goSafe("manual-repair", a.manualRepair)
 	case ID_MENU_REMEMBER:
-		go a.manualRememberTarget()
+		a.goSafe("remember-target", a.manualRememberTarget)
 	case ID_MENU_SETTINGS:
 		a.showSettings()
 	case ID_MENU_LOG:
@@ -1171,10 +1198,10 @@ func (a *App) handleMenuCommand(id int) {
 		}
 		_ = exec.Command("notepad.exe", path).Start()
 	case ID_MENU_DIAG:
-		go func() {
+		a.goSafe("diagnostics", func() {
 			path := a.generateDiagnosticReport()
 			_ = exec.Command("notepad.exe", path).Start()
-		}()
+		})
 	case ID_MENU_DATA:
 		_ = exec.Command("explorer.exe", a.dataDir).Start()
 	case ID_MENU_EXIT:
@@ -1665,10 +1692,10 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			return 0
 		case ID_BUTTON_DIAG:
 			if app != nil {
-				go func() {
+				app.goSafe("settings-diagnostics", func() {
 					path := app.generateDiagnosticReport()
 					_ = exec.Command("notepad.exe", path).Start()
-				}()
+				})
 			}
 			return 0
 		case ID_CHECK_STARTUP:
@@ -1940,7 +1967,7 @@ func main() {
 	}
 
 	logger.info("WiFi Watchdog 程序启动。")
-	go app.monitorLoop()
+	app.goSafe("monitor-loop", app.monitorLoop)
 
 	var m msg
 	for {
