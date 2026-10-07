@@ -1,0 +1,77 @@
+name: Publish v1.4.0 once
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/publish-v1.4.0-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify source
+        shell: pwsh
+        run: |
+          $goFiles = Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { $_.FullName }
+          $unformatted = gofmt -l $goFiles
+          if ($unformatted) {
+            Write-Error ("gofmt required:`n" + ($unformatted -join "`n"))
+            exit 1
+          }
+          go test -count=1 -timeout 2m ./...
+          go vet ./...
+
+      - name: Build release archives
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $version = '1.4.0'
+          $ldflags = "-H=windowsgui -s -w -X main.appVersion=$version"
+
+          foreach ($arch in @('amd64', 'arm64')) {
+            $env:GOARCH = $arch
+            $folder = "dist/WiFiWatchdog-windows-$arch"
+            New-Item -ItemType Directory -Force $folder | Out-Null
+            go build -trimpath -ldflags $ldflags -o "$folder/WiFiWatchdog.exe" .
+            Copy-Item README.md, README_EN.md, LICENSE, CHANGELOG.md $folder
+            Compress-Archive -Path "$folder/*" -DestinationPath "dist/WiFiWatchdog-windows-$arch.zip" -Force
+          }
+
+          "commit=$env:GITHUB_SHA" | Out-File -Encoding utf8 dist/BUILDINFO.txt
+          "version=v1.4.0" | Add-Content dist/BUILDINFO.txt
+          "built_utc=$([DateTime]::UtcNow.ToString('o'))" | Add-Content dist/BUILDINFO.txt
+
+          Get-ChildItem dist/*.zip | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Add-Content dist/SHA256SUMS.txt
+          }
+
+      - name: Create tag and release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (gh release view v1.4.0 2>$null) {
+            Write-Host "v1.4.0 release already exists; nothing to do."
+            exit 0
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v1.4.0 -m "WiFi Watchdog v1.4.0"
+          git push origin v1.4.0
+          gh release create v1.4.0 dist/*.zip dist/SHA256SUMS.txt dist/BUILDINFO.txt --generate-notes --title "WiFi Watchdog v1.4.0"
