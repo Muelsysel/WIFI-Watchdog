@@ -23,7 +23,7 @@ WiFi Watchdog 的目标不是看到一次失败就重启网卡，而是：
 - Native Wi‑Fi API 获取 WLAN Profile / SSID / 信号 / 接口 GUID。
 - 自动记忆最后一次成功 Wi‑Fi Profile，不依赖 SSID 与 Profile 同名。
 - VPN/TUN-aware：识别 TUN、Wintun、WireGuard、Mihomo、Clash、sing-box、OpenVPN、TAP、Tailscale、ZeroTier 等线索。
-- 支持自定义本地 VPN 端口，默认 `2026`；会尝试 HTTP CONNECT / SOCKS5 代理握手。
+- 支持可选的本地 VPN 代理端口探测；配置后会尝试 HTTP CONNECT / SOCKS5 握手。新安装默认不绑定特定端口，升级用户保留原配置。
 - 系统互联网与 Wi‑Fi Underlay 分层判断，降低 TUN 环境下误判。
 - 多源 HTTP/HTTPS/TCP 探测，支持疑似 captive portal 保护。
 - 分层恢复：DNS/DHCP → Profile 重连 → Native WLAN → netsh → 网卡重启 → 可选 WlanSvc。
