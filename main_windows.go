@@ -456,6 +456,7 @@ type App struct {
 	repairMu     sync.Mutex
 	assessmentMu sync.Mutex
 	stateMu      sync.Mutex
+	workers      sync.WaitGroup
 
 	settingsMu   sync.Mutex
 	settingsHwnd uintptr
@@ -559,7 +560,9 @@ func (a *App) reportRecoveredPanic(scope string, recovered any) {
 }
 
 func (a *App) goSafe(scope string, fn func()) {
+	a.workers.Add(1)
 	go func() {
+		defer a.workers.Done()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				a.reportRecoveredPanic(scope, recovered)
@@ -1420,7 +1423,9 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	sc.mu.Unlock()
 	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
 
+	a.workers.Add(1)
 	go func() {
+		defer a.workers.Done()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				if v, ok := settingsMap.Load(hwnd); ok {
@@ -1586,7 +1591,9 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 	setControlText(sc.statusLine, "正在后台保存设置；窗口仍可响应，不会阻塞 UI…")
 
 	old := a.getConfig()
+	a.workers.Add(1)
 	go func() {
+		defer a.workers.Done()
 		var saveErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -1996,5 +2003,19 @@ func main() {
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+	}
+
+	// Give in-flight recovery workers a short grace period to finish critical
+	// cleanup (especially re-enabling an adapter/service) before process exit.
+	done := make(chan struct{})
+	go func() {
+		app.workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		logger.info("后台任务已安全结束。")
+	case <-time.After(15 * time.Second):
+		logger.warn("退出等待后台任务超过 15 秒，程序将结束。")
 	}
 }
