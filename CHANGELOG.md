@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.1
+
+### Windows 11 settings hang isolation
+- Move the control-center/settings window onto its own dedicated locked OS thread and Win32 message queue.
+- Keep tray/Explorer Shell operations on the main UI thread so a slow `Shell_NotifyIconW` or tray interaction cannot block settings input.
+- Stop performing an automatic network/deep-status refresh when the settings window opens; refresh is now explicit.
+- Add a 2-second settings heartbeat. If the UI does not process heartbeats for 6 seconds, write a local `diagnostics/hang-*.txt` report containing all Go goroutine stacks.
+- Harden settings-thread creation, activation, close, and process-shutdown races.
+
 ## v1.4.0
 
 ### UI / responsiveness
