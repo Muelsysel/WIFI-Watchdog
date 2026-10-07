@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-var appVersion = "1.4.0"
+var appVersion = "1.4.1"
 
 type RecoveryTarget struct {
 	ProfileName          string    `json:"profileName"`
