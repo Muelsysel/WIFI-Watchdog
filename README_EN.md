@@ -4,7 +4,7 @@ Repository: `https://github.com/Muelsysel/WIFI-Watchdog`
 
 WiFi Watchdog is a lightweight Windows tray utility for detecting and recovering broken Wi‑Fi connectivity, with special care for campus Wi‑Fi, 802.1X, VPN/TUN, multiple adapters, and unattended operation.
 
-Version: **v1.4.0**
+Version: **v1.4.1**
 
 Key ideas:
 
@@ -13,7 +13,7 @@ Key ideas:
 - Remember the real Windows WLAN Profile, not only the SSID.
 - Escalate recovery gradually: DNS/DHCP → profile reconnect → adapter restart → optional WlanSvc restart.
 - Persist recovery cooldown across process restarts.
-- Pin the Win32 window/message loop to one OS thread and keep slow work off the UI thread.
+- Run the tray and settings window on separate locked Win32 OS UI threads, keeping slow work off both UI loops.
 - Use a fast system-Internet path before deep WLAN/VPN/route probing.
 - Write daily logs with configurable retention (30 days by default).
 
