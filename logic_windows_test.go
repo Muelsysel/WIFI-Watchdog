@@ -146,7 +146,6 @@ func TestDailyLoggerUsesDateAndPrunesOldFiles(t *testing.T) {
 	}
 }
 
-
 func TestLoadConfigPreservesInvalidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
