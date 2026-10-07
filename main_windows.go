@@ -1421,6 +1421,19 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
 
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if v, ok := settingsMap.Load(hwnd); ok {
+					sc := v.(*settingsControls)
+					sc.mu.Lock()
+					sc.refreshing = false
+					sc.startupErr = fmt.Sprintf("后台刷新异常：%v", recovered)
+					sc.mu.Unlock()
+					procPostMessageW.Call(hwnd, WM_SETTINGS_REFRESH_DONE, 0, 0)
+				}
+				a.reportRecoveredPanic("settings-refresh", recovered)
+			}
+		}()
 		assessment := a.assessNetwork()
 		startupEnabled, startupErr := startupTaskEnabled()
 		v, ok := settingsMap.Load(hwnd)
@@ -1575,6 +1588,25 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 	old := a.getConfig()
 	go func() {
 		var saveErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				saveErr = fmt.Errorf("后台保存异常：%v", recovered)
+				a.reportRecoveredPanic("settings-save", recovered)
+			}
+			v, ok := settingsMap.Load(hwnd)
+			if !ok {
+				return
+			}
+			sc := v.(*settingsControls)
+			sc.mu.Lock()
+			if saveErr != nil {
+				sc.saveErr = saveErr.Error()
+			}
+			sc.saveInProgress = false
+			sc.pendingConfig = c
+			sc.mu.Unlock()
+			procPostMessageW.Call(hwnd, WM_SETTINGS_SAVE_DONE, 0, 0)
+		}()
 		startupChanged := c.StartWithWindows != old.StartWithWindows
 		if startupChanged {
 			saveErr = setStartupTask(c.StartWithWindows)
@@ -1585,19 +1617,6 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 				_ = setStartupTask(old.StartWithWindows)
 			}
 		}
-		v, ok := settingsMap.Load(hwnd)
-		if !ok {
-			return
-		}
-		sc := v.(*settingsControls)
-		sc.mu.Lock()
-		if saveErr != nil {
-			sc.saveErr = saveErr.Error()
-		}
-		sc.saveInProgress = false
-		sc.pendingConfig = c
-		sc.mu.Unlock()
-		procPostMessageW.Call(hwnd, WM_SETTINGS_SAVE_DONE, 0, 0)
 	}()
 }
 
