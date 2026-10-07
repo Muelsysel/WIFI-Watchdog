@@ -293,7 +293,7 @@ func defaultConfig() Config {
 		AutoReconnectDisconnected:   false,
 		EnableWlanServiceRestart:    false,
 		EnableVPNAware:              true,
-		VPNLocalPort:                2026,
+		VPNLocalPort:                0,
 		LogRetentionDays:            30,
 		StartWithWindows:            false,
 	}
@@ -1352,7 +1352,7 @@ func (a *App) showSettings() {
 		{"Profile 重试次数", ID_EDIT_CONNECT_RETRY, c.ConnectRetryCount, "次"},
 		{"每次连接等待", ID_EDIT_CONNECT_DELAY, c.ConnectRetryDelaySeconds, "秒"},
 		{"DHCP 更新等待", ID_EDIT_DHCP_WAIT, c.DHCPRenewWaitSeconds, "秒"},
-		{"VPN/TUN 本地端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=关闭"},
+		{"VPN/TUN 本地端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=不探测"},
 		{"单次探测超时", ID_EDIT_TIMEOUT_SECONDS, c.ConnectionTimeoutSeconds, "秒"},
 		{"日志保留时间", ID_EDIT_LOG_RETENTION, c.LogRetentionDays, "天"},
 	}
