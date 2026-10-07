@@ -91,7 +91,6 @@ func TestPersistedRepairCooldownSurvivesReload(t *testing.T) {
 	}
 }
 
-
 func TestClassifyVPNProtectsHealthyWiFi(t *testing.T) {
 	n := NetworkAssessment{
 		System:   SystemProbeResult{Online: false},
