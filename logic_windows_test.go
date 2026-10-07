@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func TestNormalizeConfigClampsValues(t *testing.T) {
 		ConnectRetryDelaySeconds:    0,
 		DHCPRenewWaitSeconds:        999,
 		VPNLocalPort:                70000,
+		LogRetentionDays:            0,
 	}
 	got := normalizeConfig(c)
 	if got.NormalCheckIntervalMinutes != 1 {
@@ -37,6 +39,9 @@ func TestNormalizeConfigClampsValues(t *testing.T) {
 	}
 	if got.VPNLocalPort != 65535 {
 		t.Fatalf("vpn port = %d", got.VPNLocalPort)
+	}
+	if got.LogRetentionDays != 1 {
+		t.Fatalf("log retention = %d", got.LogRetentionDays)
 	}
 }
 
@@ -67,7 +72,7 @@ func TestPersistedRepairCooldownSurvivesReload(t *testing.T) {
 	dir := t.TempDir()
 	a := &App{
 		dataDir: dir,
-		logger:  &Logger{path: filepath.Join(dir, "test.log")},
+		logger:  newLogger(filepath.Join(dir, "logs-a"), 30),
 	}
 	a.recordAutoRepairAttempt()
 	remaining := a.remainingAutoRepairCooldown(10 * time.Minute)
@@ -78,10 +83,66 @@ func TestPersistedRepairCooldownSurvivesReload(t *testing.T) {
 	// Simulate a new App instance after process restart reading the same state.json.
 	b := &App{
 		dataDir: dir,
-		logger:  &Logger{path: filepath.Join(dir, "test2.log")},
+		logger:  newLogger(filepath.Join(dir, "logs-b"), 30),
 	}
 	remaining2 := b.remainingAutoRepairCooldown(10 * time.Minute)
 	if remaining2 <= 9*time.Minute || remaining2 > 10*time.Minute {
 		t.Fatalf("cooldown was not persisted: %v", remaining2)
+	}
+}
+
+
+func TestClassifyVPNProtectsHealthyWiFi(t *testing.T) {
+	n := NetworkAssessment{
+		System:   SystemProbeResult{Online: false},
+		WiFi:     wifiInfo{Connected: true},
+		VPN:      VPNStatus{Detected: true},
+		Underlay: WiFiUnderlayStatus{StructuralHealthy: true, StrongFault: false},
+	}
+	classifyNetworkAssessment(&n)
+	if !n.VPNProtected || n.ShouldRepairWiFi {
+		t.Fatalf("expected VPN protection without Wi-Fi repair: %+v", n)
+	}
+}
+
+func TestClassifyRepairsDisconnectedWiFiEvenWithVPN(t *testing.T) {
+	n := NetworkAssessment{
+		System: SystemProbeResult{Online: false},
+		WiFi:   wifiInfo{Connected: false},
+		VPN:    VPNStatus{Detected: true},
+	}
+	classifyNetworkAssessment(&n)
+	if !n.ShouldRepairWiFi || n.VPNProtected {
+		t.Fatalf("expected disconnected Wi-Fi to be repairable: %+v", n)
+	}
+}
+
+func TestClassifyCaptivePortalProtectsWiFi(t *testing.T) {
+	n := NetworkAssessment{
+		System:   SystemProbeResult{CaptiveSuspected: true},
+		WiFi:     wifiInfo{Connected: true},
+		Underlay: WiFiUnderlayStatus{StructuralHealthy: true},
+	}
+	classifyNetworkAssessment(&n)
+	if !n.CaptiveProtected || n.ShouldRepairWiFi {
+		t.Fatalf("expected captive portal protection: %+v", n)
+	}
+}
+
+func TestDailyLoggerUsesDateAndPrunesOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	logger := newLogger(dir, 2)
+
+	old := filepath.Join(dir, "watchdog-2000-01-01.log")
+	if err := os.WriteFile(old, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	logger.info("hello")
+
+	if _, err := os.Stat(logger.currentPath()); err != nil {
+		t.Fatalf("current daily log missing: %v", err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("old log should have been pruned, err=%v", err)
 	}
 }
