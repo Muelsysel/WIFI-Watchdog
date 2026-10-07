@@ -367,7 +367,7 @@ func vpnAdapterHints(wifiAlias string) []string {
 }
 
 func vpnAdapterDescriptionHints(wifiAlias string) []string {
-	script := `$ErrorActionPreference='SilentlyContinue'; Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "$($_.Name)`t$($_.InterfaceDescription)`t$($_.ifIndex)" }`
+	script := `$ErrorActionPreference='SilentlyContinue'; Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "$($_.Name)$([char]9)$($_.InterfaceDescription)$([char]9)$($_.ifIndex)" }`
 	out, err := powershellEncoded(script, 6*time.Second)
 	if err != nil && len(out) == 0 {
 		return nil
