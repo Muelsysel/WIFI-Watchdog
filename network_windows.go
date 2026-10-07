@@ -67,6 +67,7 @@ type NetworkAssessment struct {
 	WiFi             wifiInfo
 	System           SystemProbeResult
 	VPN              VPNStatus
+	DeepChecked      bool
 	Underlay         WiFiUnderlayStatus
 	Online           bool
 	ShouldRepairWiFi bool
@@ -627,6 +628,7 @@ func (a *App) assessNetwork() NetworkAssessment {
 
 	// Only enter the expensive/deep path after the system-level Internet probe
 	// has actually failed.
+	n.DeepChecked = true
 	n.WiFi = detectWifi()
 	n.VPN = a.detectVPNStatus(n.WiFi)
 	if n.VPN.Detected {
