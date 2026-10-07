@@ -485,9 +485,12 @@ func (a *App) restartAdapter(t RecoveryTarget) bool {
 		}
 	}
 
+	// Once disabled, re-enable is a critical cleanup action. An application exit
+	// request shortens the wait but must not leave the adapter disabled.
+	stopping := false
 	select {
 	case <-a.stopCh:
-		return false
+		stopping = true
 	case <-time.After(time.Duration(c.WifiDisableWaitSeconds) * time.Second):
 	}
 
@@ -501,6 +504,10 @@ func (a *App) restartAdapter(t RecoveryTarget) bool {
 	}
 
 	a.logger.info("Wi-Fi 网卡已重新启用，等待驱动初始化。")
+	if stopping {
+		a.logger.info("收到退出请求；网卡已重新启用，停止后续恢复步骤。")
+		return false
+	}
 	select {
 	case <-a.stopCh:
 		return false
@@ -511,15 +518,24 @@ func (a *App) restartAdapter(t RecoveryTarget) bool {
 
 func (a *App) restartWlanService() bool {
 	a.logger.warn("最后兜底：尝试重启 Windows WLAN AutoConfig (WlanSvc) 服务。")
-	// Stop can return non-zero if the service is already stopped; continue to start anyway.
+	// Stop can return non-zero if the service is already stopped; always attempt
+	// the start step so an exit request cannot intentionally leave WlanSvc down.
 	_, _ = runHiddenTimeout(30*time.Second, "sc.exe", "stop", "WlanSvc")
-	time.Sleep(3 * time.Second)
+	select {
+	case <-a.stopCh:
+		// Continue immediately to the critical start operation.
+	case <-time.After(3 * time.Second):
+	}
 	out, err := runHiddenTimeout(30*time.Second, "sc.exe", "start", "WlanSvc")
 	if err != nil {
 		a.logger.err("启动 WlanSvc 失败：" + err.Error() + " " + strings.TrimSpace(string(out)))
 		return false
 	}
-	time.Sleep(5 * time.Second)
+	select {
+	case <-a.stopCh:
+		return false
+	case <-time.After(5 * time.Second):
+	}
 	return true
 }
 
