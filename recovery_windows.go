@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf16"
+	"unsafe"
 )
 
 var appVersion = "1.4.0"
@@ -63,12 +64,15 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		// Windows Rename fails when destination exists, so replace explicitly.
-		_ = os.Remove(path)
-		if err2 := os.Rename(tmpName, path); err2 != nil {
-			return err2
-		}
+	const moveFileReplaceExisting = 0x1
+	const moveFileWriteThrough = 0x8
+	r, _, callErr := procMoveFileExW.Call(
+		uintptr(unsafe.Pointer(wstr(tmpName))),
+		uintptr(unsafe.Pointer(wstr(path))),
+		moveFileReplaceExisting|moveFileWriteThrough,
+	)
+	if r == 0 {
+		return fmt.Errorf("MoveFileExW replace failed: %v", callErr)
 	}
 	ok = true
 	return nil
@@ -123,6 +127,8 @@ func (a *App) loadPersistentStateLocked() PersistentState {
 	}
 	var st PersistentState
 	if json.Unmarshal(b, &st) != nil {
+		backup := a.statePath() + ".invalid-" + time.Now().Format("20060102-150405") + ".json"
+		_ = os.Rename(a.statePath(), backup)
 		return PersistentState{Version: 2}
 	}
 	if st.Version < 2 {
