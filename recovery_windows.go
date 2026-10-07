@@ -158,12 +158,35 @@ func (a *App) loadRememberedTarget() RecoveryTarget {
 	return a.loadPersistentState().LastTarget
 }
 
+func sameRecoveryTarget(a, b RecoveryTarget) bool {
+	return a.ProfileName == b.ProfileName &&
+		a.SSID == b.SSID &&
+		strings.EqualFold(strings.Trim(a.InterfaceGUID, "{}"), strings.Trim(b.InterfaceGUID, "{}")) &&
+		a.InterfaceName == b.InterfaceName &&
+		a.InterfaceDescription == b.InterfaceDescription
+}
+
 func (a *App) rememberTarget(t RecoveryTarget) {
 	if t.ProfileName == "" && t.SSID == "" {
 		return
 	}
-	t.LastSeen = time.Now()
-	if err := a.updatePersistentState(func(st *PersistentState) { st.LastTarget = t }); err != nil {
+	now := time.Now()
+
+	// A stable connection is observed every normal monitoring cycle. Do not
+	// rewrite state.json and repeat the same INFO line every ten minutes; refresh
+	// the timestamp at most every six hours unless the target identity changes.
+	a.stateMu.Lock()
+	st := a.loadPersistentStateLocked()
+	if sameRecoveryTarget(st.LastTarget, t) && !st.LastTarget.LastSeen.IsZero() &&
+		now.Sub(st.LastTarget.LastSeen) >= 0 && now.Sub(st.LastTarget.LastSeen) < 6*time.Hour {
+		a.stateMu.Unlock()
+		return
+	}
+	t.LastSeen = now
+	st.LastTarget = t
+	err := a.savePersistentStateLocked(st)
+	a.stateMu.Unlock()
+	if err != nil {
 		a.logger.warn("保存恢复目标失败：" + err.Error())
 		return
 	}
@@ -171,7 +194,18 @@ func (a *App) rememberTarget(t RecoveryTarget) {
 }
 
 func (a *App) recordInternetOK() {
-	_ = a.updatePersistentState(func(st *PersistentState) { st.LastInternetOKAt = time.Now() })
+	now := time.Now()
+	a.stateMu.Lock()
+	st := a.loadPersistentStateLocked()
+	// This timestamp is diagnostic context, not a heartbeat database. A
+	// 30-minute granularity is sufficient and greatly reduces unattended writes.
+	if !st.LastInternetOKAt.IsZero() && now.Sub(st.LastInternetOKAt) >= 0 && now.Sub(st.LastInternetOKAt) < 30*time.Minute {
+		a.stateMu.Unlock()
+		return
+	}
+	st.LastInternetOKAt = now
+	_ = a.savePersistentStateLocked(st)
+	a.stateMu.Unlock()
 }
 
 func (a *App) recordAutoRepairAttempt() {
@@ -692,7 +726,9 @@ func (a *App) cleanupOldDiagnostics(now time.Time) {
 	}
 	cutoff := now.AddDate(0, 0, -retention)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "diagnostics-") || !strings.HasSuffix(entry.Name(), ".txt") {
+		name := entry.Name()
+		managed := strings.HasPrefix(name, "diagnostics-") || strings.HasPrefix(name, "crash-")
+		if entry.IsDir() || !managed || !strings.HasSuffix(name, ".txt") {
 			continue
 		}
 		info, err := entry.Info()
