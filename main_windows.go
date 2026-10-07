@@ -1324,11 +1324,15 @@ func (a *App) showSettings() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer func() {
-			if recovered := recover(); recovered != nil {
-				a.settingsMu.Lock()
-				a.settingsOpening = false
+			a.settingsMu.Lock()
+			a.settingsOpening = false
+			if a.settingsHwnd != 0 {
+				// WM_DESTROY normally clears this. This fallback prevents a stale
+				// handle if creation/message-loop setup exits abnormally.
 				a.settingsHwnd = 0
-				a.settingsMu.Unlock()
+			}
+			a.settingsMu.Unlock()
+			if recovered := recover(); recovered != nil {
 				a.reportRecoveredPanic("settings-ui-thread", recovered)
 			}
 		}()
@@ -1337,6 +1341,12 @@ func (a *App) showSettings() {
 }
 
 func (a *App) runSettingsThread() {
+	select {
+	case <-a.stopCh:
+		return
+	default:
+	}
+
 	screenW, _, _ := procGetSystemMetrics.Call(0)
 	screenH, _, _ := procGetSystemMetrics.Call(1)
 	width, height := int32(780), int32(720)
@@ -1440,6 +1450,13 @@ func (a *App) runSettingsThread() {
 
 	a.settingsHeartbeat.Store(time.Now().UnixNano())
 	a.goSafe("settings-hang-watchdog", func() { a.watchSettingsResponsiveness(hwnd) })
+
+	select {
+	case <-a.stopCh:
+		procDestroyWindow.Call(hwnd)
+		return
+	default:
+	}
 
 	var m msg
 	for {
