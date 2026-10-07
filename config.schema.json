@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WiFi Watchdog configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "normalCheckIntervalMinutes": { "type": "integer", "minimum": 1, "maximum": 1440, "default": 10 },
+    "failureCheckIntervalSeconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 10 },
+    "failureThreshold": { "type": "integer", "minimum": 1, "maximum": 100, "default": 5 },
+    "repairRetryIntervalMinutes": { "type": "integer", "minimum": 1, "maximum": 1440, "default": 10 },
+    "wifiDisableWaitSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "default": 3 },
+    "wifiStartupWaitSeconds": { "type": "integer", "minimum": 1, "maximum": 600, "default": 15 },
+    "connectionTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 30, "default": 4 },
+    "connectRetryCount": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
+    "connectRetryDelaySeconds": { "type": "integer", "minimum": 1, "maximum": 60, "default": 6 },
+    "dhcpRenewWaitSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "default": 8 },
+    "autoReconnectDisconnected": { "type": "boolean", "default": false },
+    "enableWlanServiceRestart": { "type": "boolean", "default": false },
+    "enableVpnAware": { "type": "boolean", "default": true },
+    "vpnLocalPort": { "type": "integer", "minimum": 0, "maximum": 65535, "default": 0 },
+    "logRetentionDays": { "type": "integer", "minimum": 1, "maximum": 3650, "default": 30 },
+    "startWithWindows": { "type": "boolean", "default": false }
+  }
+}
