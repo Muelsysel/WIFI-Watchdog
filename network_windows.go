@@ -32,8 +32,10 @@ type HTTPProbeDetail struct {
 
 type SystemProbeResult struct {
 	Online             bool
+	HTTPAttempted      int
 	ValidHTTP          int
 	ReachedHTTP        int
+	TCPAttempted       int
 	TCPFallbackSuccess int
 	CaptiveSuspected   bool
 	Details            []HTTPProbeDetail
@@ -168,7 +170,7 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 		go func() { ch <- probeHTTP(ctx, client, t.name, t.url, t.v) }()
 	}
 
-	r := SystemProbeResult{Details: make([]HTTPProbeDetail, 0, len(targets))}
+	r := SystemProbeResult{HTTPAttempted: len(targets), Details: make([]HTTPProbeDetail, 0, len(targets))}
 	plainUnexpected := false
 	for range targets {
 		d := <-ch
@@ -178,23 +180,22 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 		}
 		if d.Valid {
 			r.ValidHTTP++
+			r.Online = true
+			// A single validated public response is already strong proof of usable
+			// system Internet. Cancel slower endpoints (for example a blocked
+			// regional target) instead of making every healthy check wait for them.
+			cancel()
+			return r
 		}
 		if d.Reached && !d.Valid && (d.Name == "Microsoft-NCSI" || d.Name == "Google-204") {
 			plainUnexpected = true
 		}
 	}
 
-	// Any validated public HTTP/HTTPS response is strong proof that the system
-	// has usable internet. This is intentionally conservative against invasive
-	// Wi-Fi repair: one real successful endpoint is enough.
-	if r.ValidHTTP > 0 {
-		r.Online = true
-		return r
-	}
-
 	// If HTTP is filtered but raw public TCP is reachable, still prefer a
 	// false-negative-avoiding "online/degraded" result over resetting Wi-Fi.
 	tcpTargets := []string{"1.1.1.1:443", "223.5.5.5:53"}
+	r.TCPAttempted = len(tcpTargets)
 	tcpCh := make(chan bool, len(tcpTargets))
 	for _, addr := range tcpTargets {
 		addr := addr
@@ -212,11 +213,11 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 	for range tcpTargets {
 		if <-tcpCh {
 			r.TCPFallbackSuccess++
+			r.Online = true
+			return r
 		}
 	}
-	if r.TCPFallbackSuccess > 0 {
-		r.Online = true
-	} else if plainUnexpected {
+	if plainUnexpected {
 		r.CaptiveSuspected = true
 	}
 	return r
@@ -233,8 +234,8 @@ func (a *App) logSystemProbe(r SystemProbeResult) {
 		}
 		parts = append(parts, fmt.Sprintf("%s=%s", d.Name, state))
 	}
-	a.logger.info(fmt.Sprintf("系统互联网探测：HTTP有效=%d/%d，TCP兜底=%d/2，Online=%v；%s",
-		r.ValidHTTP, len(r.Details), r.TCPFallbackSuccess, r.Online, strings.Join(parts, ", ")))
+	a.logger.info(fmt.Sprintf("系统互联网探测：HTTP有效=%d/%d，TCP兜底=%d/%d，Online=%v；%s",
+		r.ValidHTTP, r.HTTPAttempted, r.TCPFallbackSuccess, r.TCPAttempted, r.Online, strings.Join(parts, ", ")))
 }
 
 func localPortOpen(port int, timeout time.Duration) bool {
