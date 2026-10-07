@@ -18,20 +18,29 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Check formatting (advisory)
+      - name: Check formatting
         shell: pwsh
         run: |
           $goFiles = Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { $_.FullName }
-          $files = gofmt -l $goFiles
-          if ($files) {
-            Write-Warning ("gofmt recommended for:`n" + ($files -join "`n"))
+          gofmt -w $goFiles
+          if (git status --porcelain -- '*.go') {
+            Write-Host '----- gofmt diff -----'
+            git diff -- '*.go'
+            Write-Error 'Go source formatting is not canonical. Apply gofmt.'
+            exit 1
           }
 
       - name: Test
-        run: go test ./...
+        run: go test -count=1 -timeout 2m ./...
 
       - name: Vet
         run: go vet ./...
 
       - name: Build Windows amd64
-        run: go build -trimpath -ldflags "-H=windowsgui" -o WiFiWatchdog.exe .
+        run: go build -trimpath -ldflags "-H=windowsgui" -o WiFiWatchdog-amd64.exe .
+
+      - name: Build Windows arm64
+        shell: pwsh
+        run: |
+          $env:GOARCH = 'arm64'
+          go build -trimpath -ldflags "-H=windowsgui" -o WiFiWatchdog-arm64.exe .
