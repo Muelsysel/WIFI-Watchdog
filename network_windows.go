@@ -559,40 +559,22 @@ func (a *App) assessWiFiUnderlay(wifi wifiInfo) WiFiUnderlayStatus {
 	return u
 }
 
-func (a *App) assessNetwork() NetworkAssessment {
-	// 网络判定会调用 route/arp/ping/HTTP 等多个系统接口。串行化评估，
-	// 避免监控循环、设置页刷新和手动检测同时启动多组探测造成拥塞。
-	a.assessmentMu.Lock()
-	defer a.assessmentMu.Unlock()
-
-	n := NetworkAssessment{}
-	n.WiFi = detectWifi()
-	n.System = a.systemInternetProbe()
-	a.logSystemProbe(n.System)
+func classifyNetworkAssessment(n *NetworkAssessment) {
 	if n.System.Online {
 		n.Online = true
 		n.Reason = "系统互联网可用"
-		return n
+		return
 	}
-
-	n.VPN = a.detectVPNStatus(n.WiFi)
-	if n.VPN.Detected {
-		a.logger.info("检测到 VPN/TUN 信号：" + strings.Join(n.VPN.Signals, "; "))
-	}
-
 	if !n.WiFi.Connected {
 		n.ShouldRepairWiFi = true
 		n.Reason = "系统无网且 Wi-Fi 未关联"
-		return n
+		return
 	}
-
-	n.Underlay = a.assessWiFiUnderlay(n.WiFi)
 	if n.System.CaptiveSuspected && !n.Underlay.StrongFault {
 		n.CaptiveProtected = true
 		n.Reason = "疑似认证门户/受限网络，避免自动重启 Wi-Fi"
-		return n
+		return
 	}
-
 	if n.VPN.Detected && !n.Underlay.StrongFault {
 		n.VPNProtected = true
 		if n.VPN.ProxyUpstreamOK {
@@ -600,19 +582,60 @@ func (a *App) assessNetwork() NetworkAssessment {
 		} else {
 			n.Reason = "系统互联网异常，但检测到 VPN/TUN 且 Wi-Fi 底层未发现强故障证据"
 		}
-		return n
+		return
 	}
-
 	if n.VPN.Detected && n.Underlay.StrongFault {
 		n.ShouldRepairWiFi = true
 		n.Reason = "VPN/TUN 存在，但 Wi-Fi 底层存在强故障证据：" + n.Underlay.Reason
+		return
+	}
+
+	// No VPN/TUN evidence: preserve the watchdog behavior. A confirmed system
+	// internet failure is enough to allow recovery, but the multi-stage repair
+	// still starts from the least invasive operation.
+	n.ShouldRepairWiFi = true
+	n.Reason = "系统互联网不可用且未检测到 VPN/TUN 保护条件"
+}
+
+func fastNativeWifiSnapshot() wifiInfo {
+	info, err := detectWifiNative()
+	if err != nil {
+		return wifiInfo{}
+	}
+	return info
+}
+
+func (a *App) assessNetwork() NetworkAssessment {
+	// Heavy assessment is serialized so the monitor loop, settings page and
+	// manual checks cannot stampede route/ARP/ping/HTTP probes.
+	a.assessmentMu.Lock()
+	defer a.assessmentMu.Unlock()
+
+	n := NetworkAssessment{}
+
+	// Fast path first: when Windows really has usable Internet, there is no need
+	// to run netsh/route/ARP/underlay probes at all. This dramatically shortens
+	// the common path and removes a major source of perceived UI "hangs".
+	n.System = a.systemInternetProbe()
+	a.logSystemProbe(n.System)
+	if n.System.Online {
+		n.WiFi = fastNativeWifiSnapshot()
+		classifyNetworkAssessment(&n)
 		return n
 	}
 
-	// No VPN/TUN evidence: preserve the original watchdog behavior. A real
-	// system internet failure after confirmation is enough to attempt repair.
-	n.ShouldRepairWiFi = true
-	n.Reason = "系统互联网不可用且未检测到 VPN/TUN 保护条件"
+	// Only enter the expensive/deep path after the system-level Internet probe
+	// has actually failed.
+	n.WiFi = detectWifi()
+	n.VPN = a.detectVPNStatus(n.WiFi)
+	if n.VPN.Detected {
+		a.logger.info("检测到 VPN/TUN 信号：" + strings.Join(n.VPN.Signals, "; "))
+	}
+
+	if n.WiFi.Connected {
+		n.Underlay = a.assessWiFiUnderlay(n.WiFi)
+	}
+	classifyNetworkAssessment(&n)
 	return n
 }
 
