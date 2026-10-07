@@ -2,7 +2,7 @@
 
 一个面向 Windows 的轻量级 Wi‑Fi 自动检测与恢复工具，重点适配校园网、802.1X、VPN/TUN、多网卡和无人值守场景。
 
-> 当前版本：**v1.4.0**
+> 当前版本：**v1.4.1**
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
@@ -28,7 +28,7 @@ WiFi Watchdog 的目标不是看到一次失败就重启网卡，而是：
 - 多源 HTTP/HTTPS/TCP 探测，支持疑似 captive portal 保护。
 - 分层恢复：DNS/DHCP → Profile 重连 → Native WLAN → netsh → 网卡重启 → 可选 WlanSvc。
 - 两次自动恢复之间有持久化冷却时间；即使重启程序也不会绕过冷却。
-- Win32 UI/message loop 固定在专用 OS 线程；耗时操作全部后台化，降低随机“未响应”风险。
+- 托盘与设置窗口分别运行在独立的 Win32 OS UI 线程；耗时操作全部后台化，降低 Win11 随机“未响应”风险。
 - 正常在线时走快速路径，不再执行不必要的 `netsh` / route / ARP 深度探测。
 - 每日日志、可配置保留天数、诊断报告分目录、原子配置写入、单实例保护。
 - GitHub Actions 自动 CI / Windows x64 + ARM64 Release 构建。

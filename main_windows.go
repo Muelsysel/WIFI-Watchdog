@@ -39,6 +39,8 @@ const (
 	WM_SETTINGS_REFRESH_DONE = WM_APP + 10
 	WM_SETTINGS_STARTUP_DONE = WM_APP + 11
 	WM_SETTINGS_SAVE_DONE    = WM_APP + 12
+	WM_SETTINGS_ACTIVATE     = WM_APP + 13
+	WM_SETTINGS_HEARTBEAT    = WM_APP + 14
 
 	NIM_ADD    = 0x00000000
 	NIM_MODIFY = 0x00000001
@@ -460,8 +462,12 @@ type App struct {
 	stateMu      sync.Mutex
 	workers      sync.WaitGroup
 
-	settingsMu   sync.Mutex
-	settingsHwnd uintptr
+	settingsMu      sync.Mutex
+	settingsHwnd    uintptr
+	settingsOpening bool
+
+	settingsHeartbeat atomic.Int64
+	settingsLastDump  atomic.Int64
 
 	shownStartupBalloon bool
 	mutexHandle         uintptr
@@ -1299,12 +1305,46 @@ func isChecked(hwnd uintptr) bool {
 
 func (a *App) showSettings() {
 	a.settingsMu.Lock()
-	existing := a.settingsHwnd
-	a.settingsMu.Unlock()
-	if existing != 0 {
-		procShowWindow.Call(existing, SW_SHOW)
-		procSetForegroundWindow.Call(existing)
+	if a.settingsHwnd != 0 {
+		hwnd := a.settingsHwnd
+		a.settingsMu.Unlock()
+		procPostMessageW.Call(hwnd, WM_SETTINGS_ACTIVATE, 0, 0)
 		return
+	}
+	if a.settingsOpening {
+		a.settingsMu.Unlock()
+		return
+	}
+	a.settingsOpening = true
+	a.settingsMu.Unlock()
+
+	a.workers.Add(1)
+	go func() {
+		defer a.workers.Done()
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		defer func() {
+			a.settingsMu.Lock()
+			a.settingsOpening = false
+			if a.settingsHwnd != 0 {
+				// WM_DESTROY normally clears this. This fallback prevents a stale
+				// handle if creation/message-loop setup exits abnormally.
+				a.settingsHwnd = 0
+			}
+			a.settingsMu.Unlock()
+			if recovered := recover(); recovered != nil {
+				a.reportRecoveredPanic("settings-ui-thread", recovered)
+			}
+		}()
+		a.runSettingsThread()
+	}()
+}
+
+func (a *App) runSettingsThread() {
+	select {
+	case <-a.stopCh:
+		return
+	default:
 	}
 
 	screenW, _, _ := procGetSystemMetrics.Call(0)
@@ -1398,12 +1438,88 @@ func (a *App) showSettings() {
 
 	a.settingsMu.Lock()
 	a.settingsHwnd = hwnd
+	a.settingsOpening = false
 	a.settingsMu.Unlock()
-	// Build the full control tree while hidden, then show it once. This avoids
-	// repeated synchronous paints during construction on slower systems.
+
+	// Build the full control tree while hidden, then show it once. The settings
+	// UI now owns a dedicated OS thread and message queue, isolated from the tray
+	// and Explorer Shell calls on the main UI thread.
+	setControlText(sc.statusLine, "设置窗口已就绪。需要网络详情时点击“刷新状态”。")
 	procShowWindow.Call(hwnd, SW_SHOW)
 	procSetForegroundWindow.Call(hwnd)
-	a.startSettingsRefresh(hwnd)
+
+	a.settingsHeartbeat.Store(time.Now().UnixNano())
+	a.goSafe("settings-hang-watchdog", func() { a.watchSettingsResponsiveness(hwnd) })
+
+	select {
+	case <-a.stopCh:
+		procDestroyWindow.Call(hwnd)
+		return
+	default:
+	}
+
+	var m msg
+	for {
+		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if int32(r) == -1 || r == 0 {
+			break
+		}
+		if handled, _, _ := procIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&m))); handled != 0 {
+			continue
+		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+	}
+}
+
+func (a *App) watchSettingsResponsiveness(hwnd uintptr) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case <-ticker.C:
+			a.settingsMu.Lock()
+			alive := a.settingsHwnd == hwnd
+			a.settingsMu.Unlock()
+			if !alive {
+				return
+			}
+
+			now := time.Now()
+			last := a.settingsHeartbeat.Load()
+			procPostMessageW.Call(hwnd, WM_SETTINGS_HEARTBEAT, 0, 0)
+			if last == 0 || now.Sub(time.Unix(0, last)) < 6*time.Second {
+				continue
+			}
+
+			lastDump := a.settingsLastDump.Load()
+			if lastDump != 0 && now.Sub(time.Unix(0, lastDump)) < 30*time.Second {
+				continue
+			}
+			a.settingsLastDump.Store(now.UnixNano())
+			a.writeSettingsHangReport(now, hwnd)
+		}
+	}
+}
+
+func (a *App) writeSettingsHangReport(now time.Time, hwnd uintptr) {
+	dir := filepath.Join(a.dataDir, "diagnostics")
+	_ = os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, "hang-"+now.Format("20060102-150405")+".txt")
+
+	buf := make([]byte, 2*1024*1024)
+	n := runtime.Stack(buf, true)
+	state, status := a.currentStatus()
+	body := fmt.Sprintf(
+		"WiFi Watchdog UI hang report\r\nVersion: %s\r\nTime: %s\r\nSettings HWND: 0x%x\r\nMonitor state: %d\r\nMonitor status: %s\r\n\r\n===== ALL GO GOROUTINES =====\r\n%s",
+		appVersion, now.Format(time.RFC3339), hwnd, state, status, string(buf[:n]),
+	)
+	_ = atomicWriteFile(path, []byte(body), 0644)
+	if a.logger != nil {
+		a.logger.err("检测到设置窗口超过 6 秒未处理心跳，已生成挂起报告：" + path)
+	}
 }
 
 func getWindowText(hwnd uintptr) string {
@@ -1756,6 +1872,15 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			app.finishSettingsSave(hwnd)
 		}
 		return 0
+	case WM_SETTINGS_ACTIVATE:
+		procShowWindow.Call(hwnd, SW_SHOW)
+		procSetForegroundWindow.Call(hwnd)
+		return 0
+	case WM_SETTINGS_HEARTBEAT:
+		if app != nil {
+			app.settingsHeartbeat.Store(time.Now().UnixNano())
+		}
+		return 0
 	case WM_CLOSE:
 		if v, ok := settingsMap.Load(hwnd); ok {
 			sc := v.(*settingsControls)
@@ -1776,8 +1901,12 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			if app.settingsHwnd == hwnd {
 				app.settingsHwnd = 0
 			}
+			app.settingsOpening = false
 			app.settingsMu.Unlock()
 		}
+		// Settings owns a dedicated message queue/thread, so WM_QUIT here only
+		// terminates that UI thread and cannot stop the tray/main window.
+		procPostQuitMessage.Call(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(message), wParam, lParam)
@@ -1807,6 +1936,12 @@ func mainWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_DESTROY:
 		if app != nil {
+			app.settingsMu.Lock()
+			settingsHwnd := app.settingsHwnd
+			app.settingsMu.Unlock()
+			if settingsHwnd != 0 {
+				procPostMessageW.Call(settingsHwnd, WM_CLOSE, 0, 0)
+			}
 			app.stop()
 			app.removeTrayIcon()
 			app.logger.info("WiFi Watchdog 退出。")
@@ -2014,14 +2149,6 @@ func main() {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) == -1 || r == 0 {
 			break
-		}
-		app.settingsMu.Lock()
-		settingsHwnd := app.settingsHwnd
-		app.settingsMu.Unlock()
-		if settingsHwnd != 0 {
-			if handled, _, _ := procIsDialogMessageW.Call(settingsHwnd, uintptr(unsafe.Pointer(&m))); handled != 0 {
-				continue
-			}
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
