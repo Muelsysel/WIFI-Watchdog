@@ -8,6 +8,7 @@
 
 - hidden message window + system tray;
 - control-center/settings window;
+- the entire Win32 window lifecycle and message loop are pinned to one OS thread with `runtime.LockOSThread`;
 - all slow work is dispatched to goroutines;
 - results return to the UI thread through custom `WM_APP` messages;
 - UI thread never waits on `schtasks`, network probes, diagnostics, or recovery commands.
@@ -30,7 +31,9 @@ Automatic repair requires repeated failure confirmation and a positive safety de
 
 `network_windows.go`
 
-Three independent views are combined:
+The common online path starts with system Internet reachability. Deep WLAN/netsh/route/ARP work is skipped entirely when the system is already online.
+
+When the system is offline, three independent views are combined:
 
 1. **System Internet** — real HTTP/HTTPS/TCP reachability using normal Windows routing, including TUN/VPN.
 2. **VPN/TUN signals** — local port, proxy handshake, adapter hints, split-default route hints.
@@ -75,7 +78,9 @@ The recovery target and automatic cooldown timestamp are persisted in `state.jso
 - `repairMu`: only one recovery sequence at a time;
 - `stateMu`: serializes `state.json` access;
 - `cfgMu`: protects live configuration;
-- UI performs no slow command synchronously.
+- UI performs no slow command synchronously;
+- background workers return UI results with `PostMessage`;
+- repeated tray status updates are coalesced so the message queue cannot be flooded.
 
 ## Design principles
 
@@ -84,3 +89,11 @@ The recovery target and automatic cooldown timestamp are persisted in `state.jso
 - saved Windows WLAN Profiles own credentials;
 - recovery cooldown survives app restarts;
 - external commands always need a timeout.
+
+## Logs and diagnostics
+
+- runtime logs live in `%LOCALAPPDATA%\WiFiWatchdog\logs\watchdog-YYYY-MM-DD.log`;
+- retention is configurable (30 days by default);
+- old daily logs are cleaned once per day when the first log entry is written;
+- legacy `watchdog.log` files are migrated into `logs/` on upgrade;
+- diagnostic reports live separately in `diagnostics/` and follow the same retention window.
