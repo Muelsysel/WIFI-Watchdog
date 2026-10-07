@@ -2,7 +2,7 @@
 
 一个面向 Windows 的轻量级 Wi‑Fi 自动检测与恢复工具，重点适配校园网、802.1X、VPN/TUN、多网卡和无人值守场景。
 
-> 当前版本：**v1.3.0**
+> 当前版本：**v1.4.0**
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
@@ -28,8 +28,9 @@ WiFi Watchdog 的目标不是看到一次失败就重启网卡，而是：
 - 多源 HTTP/HTTPS/TCP 探测，支持疑似 captive portal 保护。
 - 分层恢复：DNS/DHCP → Profile 重连 → Native WLAN → netsh → 网卡重启 → 可选 WlanSvc。
 - 两次自动恢复之间有持久化冷却时间；即使重启程序也不会绕过冷却。
-- 设置页所有耗时操作后台化，避免 UI 因 `schtasks` / 网络探测而卡死。
-- 诊断报告、日志轮转、原子配置写入、单实例保护。
+- Win32 UI/message loop 固定在专用 OS 线程；耗时操作全部后台化，降低随机“未响应”风险。
+- 正常在线时走快速路径，不再执行不必要的 `netsh` / route / ARP 深度探测。
+- 每日日志、可配置保留天数、诊断报告分目录、原子配置写入、单实例保护。
 - GitHub Actions 自动 CI / Windows x64 + ARM64 Release 构建。
 
 ## 默认策略
@@ -54,7 +55,7 @@ WiFi Watchdog 的目标不是看到一次失败就重启网卡，而是：
 
 ## VPN / TUN 场景
 
-v1.3 不会把“Wi‑Fi 直连探测失败”直接等同于“电脑没网”。
+v1.4 不会把“Wi‑Fi 直连探测失败”直接等同于“电脑没网”，并且正常在线时优先完成系统 Internet 快速探测。
 
 如果系统互联网通过 TUN 正常：
 
@@ -79,7 +80,7 @@ Wi-Fi → TUN/VPN → Internet
 
 不会自动执行 `winsock reset`、`netsh int ip reset` 等高侵入且可能要求重启 Windows 的操作。
 
-## v1.3 的 UI 卡顿修复
+## v1.4 的 UI 稳定性修复
 
 v1.2 的设置窗口会在 UI 主线程里同步执行：
 
@@ -91,7 +92,9 @@ schtasks.exe /Delete
 
 任务计划程序或系统服务响应慢时，Win32 消息循环停止处理，因此窗口会表现为“卡住/未响应”。
 
-v1.3 将以下操作全部放到后台 goroutine，并设置超时：
+v1.4 在 v1.3 的异步化基础上继续修复一个更底层的问题：Win32 窗口/消息队列是线程绑定的，而 Go goroutine 默认可能迁移 OS 线程。现在窗口创建和消息泵会通过 `runtime.LockOSThread()` 固定在同一 UI 线程。
+
+同时，以下操作继续保持后台执行并设置超时：
 
 - 开机自启状态查询；
 - 创建/删除计划任务；
@@ -99,7 +102,7 @@ v1.3 将以下操作全部放到后台 goroutine，并设置超时：
 - 诊断报告生成；
 - 配置保存相关系统操作。
 
-设置窗口会立即显示并保持响应。
+设置保存成功后窗口也不会自动关闭，可继续调整；后台状态更新通过 `PostMessage` 回到 UI 线程，并对重复状态消息做合并。
 
 ## 使用
 
@@ -134,8 +137,10 @@ v1.3 将以下操作全部放到后台 goroutine，并设置超时：
 
 - `config.json`：配置；
 - `state.json`：恢复目标和自动恢复冷却状态；
-- `watchdog.log`：运行日志；
-- `diagnostics-*.txt`：手动生成的诊断报告。
+- `logs/watchdog-YYYY-MM-DD.log`：按天保存的运行日志，默认保留 30 天；
+- `diagnostics/diagnostics-*.txt`：手动生成的诊断报告。
+
+日志保留天数可在控制中心修改；程序每天首次写日志时自动清理过期文件。升级自 v1.3 时，旧的 `watchdog.log` / `watchdog.log.1` 会迁移到 `logs/` 下保存。
 
 程序不会读取或保存 Wi‑Fi / 802.1X 密码。认证凭据始终由 Windows WLAN Profile 管理。
 
