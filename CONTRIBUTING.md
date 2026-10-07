@@ -25,7 +25,7 @@ go build -trimpath -ldflags "-H=windowsgui" .
 - 无线网卡型号；
 - 是否使用 VPN/TUN；
 - VPN 软件及本地端口；
-- `watchdog.log` 中相关时间段；
+- `logs/watchdog-YYYY-MM-DD.log` 中相关时间段；
 - 托盘 → “生成诊断报告”的结果（请先脱敏）。
 
 不要公开提交账号、密码、802.1X 凭据、真实公网 IP 或不希望暴露的 SSID。
