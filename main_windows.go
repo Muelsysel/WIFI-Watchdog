@@ -1504,6 +1504,8 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 			detail = string([]rune(detail)[:75]) + "…"
 		}
 		setControlText(sc.summaryVPN, "VPN/TUN：已检测到 · "+detail)
+	} else if n.Online && !n.DeepChecked {
+		setControlText(sc.summaryVPN, "VPN/TUN：系统在线，未执行深度检测（无需影响 Wi-Fi 判定）")
 	} else {
 		setControlText(sc.summaryVPN, "VPN/TUN：未检测到明显信号")
 	}
