@@ -366,6 +366,34 @@ func vpnAdapterHints(wifiAlias string) []string {
 	return out
 }
 
+func vpnAdapterDescriptionHints(wifiAlias string) []string {
+	script := `$ErrorActionPreference='SilentlyContinue'; Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "$($_.Name)`t$($_.InterfaceDescription)`t$($_.ifIndex)" }`
+	out, err := powershellEncoded(script, 6*time.Second)
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	var hints []string
+	for _, raw := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
+		fields := strings.Split(strings.TrimSpace(raw), "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		description := strings.TrimSpace(fields[1])
+		if strings.EqualFold(name, strings.TrimSpace(wifiAlias)) {
+			continue
+		}
+		if vpnNameRE.MatchString(name + " " + description) {
+			ifIndex := ""
+			if len(fields) >= 3 {
+				ifIndex = strings.TrimSpace(fields[2])
+			}
+			hints = append(hints, fmt.Sprintf("adapter-description:%s/%s(ifIndex=%s)", name, description, ifIndex))
+		}
+	}
+	return hints
+}
+
 func vpnRouteHints() []string {
 	out, err := runHiddenTimeout(8*time.Second, "route.exe", "print", "-4")
 	if err != nil && len(out) == 0 {
@@ -415,6 +443,9 @@ func (a *App) detectVPNStatus(wifi wifiInfo) VPNStatus {
 		}
 	}
 	v.AdapterHints = vpnAdapterHints(wifi.InterfaceName)
+	if len(v.AdapterHints) == 0 {
+		v.AdapterHints = vpnAdapterDescriptionHints(wifi.InterfaceName)
+	}
 	v.RouteHints = vpnRouteHints()
 	v.Signals = append(v.Signals, v.AdapterHints...)
 	v.Signals = append(v.Signals, v.RouteHints...)
