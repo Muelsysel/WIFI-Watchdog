@@ -144,6 +144,12 @@ v1.4 在 v1.3 的异步化基础上继续修复一个更底层的问题：Win32 
 
 程序不会读取或保存 Wi‑Fi / 802.1X 密码。认证凭据始终由 Windows WLAN Profile 管理。
 
+## 配置说明
+
+完整参数表与安全范围见 [docs/CONFIGURATION.md](docs/CONFIGURATION.md)，机器可读的 JSON Schema 见 [config.schema.json](config.schema.json)。
+
+全新安装默认不会假设某个 VPN 本地代理端口；如使用 Clash/Mihomo 的 mixed-port（例如你自己的 `2026`），可在控制中心显式填写。已有配置升级时不会被覆盖。
+
 ## 从源码构建
 
 要求：Go 1.23+。
