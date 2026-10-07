@@ -22,11 +22,9 @@ jobs:
         shell: pwsh
         run: |
           $goFiles = Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { $_.FullName }
-          gofmt -w $goFiles
-          if (git status --porcelain -- '*.go') {
-            Write-Host '----- gofmt diff -----'
-            git diff -- '*.go'
-            Write-Error 'Go source formatting is not canonical. Apply gofmt.'
+          $unformatted = gofmt -l $goFiles
+          if ($unformatted) {
+            Write-Error ("gofmt required:`n" + ($unformatted -join "`n"))
             exit 1
           }
 
