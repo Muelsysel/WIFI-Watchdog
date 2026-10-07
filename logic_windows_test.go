@@ -145,3 +145,38 @@ func TestDailyLoggerUsesDateAndPrunesOldFiles(t *testing.T) {
 		t.Fatalf("old log should have been pruned, err=%v", err)
 	}
 }
+
+
+func TestLoadConfigPreservesInvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{not-json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := loadConfig(path)
+	if got.NormalCheckIntervalMinutes != defaultConfig().NormalCheckIntervalMinutes {
+		t.Fatalf("did not fall back to defaults: %+v", got)
+	}
+	matches, err := filepath.Glob(path + ".invalid-*.json")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("invalid config backup missing: matches=%v err=%v", matches, err)
+	}
+}
+
+func TestAtomicWriteFileReplacesExistingContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(path, []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("unexpected content: %q", string(got))
+	}
+}
