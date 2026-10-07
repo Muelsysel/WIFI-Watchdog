@@ -1283,7 +1283,7 @@ func (a *App) showSettings() {
 		0,
 		uintptr(unsafe.Pointer(wstr("WiFiWatchdog.Settings"))),
 		uintptr(unsafe.Pointer(wstr("WiFi Watchdog 控制中心 v"+appVersion))),
-		uintptr(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_VISIBLE),
+		uintptr(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU),
 		uintptr(x), uintptr(y), uintptr(width), uintptr(height),
 		0, 0, hInstance, 0,
 	)
@@ -1364,6 +1364,9 @@ func (a *App) showSettings() {
 	a.settingsMu.Lock()
 	a.settingsHwnd = hwnd
 	a.settingsMu.Unlock()
+	// Build the full control tree while hidden, then show it once. This avoids
+	// repeated synchronous paints during construction on slower systems.
+	procShowWindow.Call(hwnd, SW_SHOW)
 	procSetForegroundWindow.Call(hwnd)
 	a.startSettingsRefresh(hwnd)
 }
