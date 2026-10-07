@@ -48,6 +48,7 @@ type VPNStatus struct {
 	ProxyProtocol   string
 	AdapterHints    []string
 	RouteHints      []string
+	ProxyHints      []string
 	Signals         []string
 }
 
@@ -394,6 +395,438 @@ func vpnAdapterDescriptionHints(wifiAlias string) []string {
 	return hints
 }
 
+func windowsProxyHints() []string {
+	const key = `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+	var hints []string
+
+	query := func(value string) ([]byte, bool) {
+		out, err := runHiddenTimeout(4*time.Second, "reg.exe", "query", key, "/v", value)
+		return out, err == nil
+	}
+
+	if out, ok := query("ProxyEnable"); ok {
+		lower := strings.ToLower(string(out))
+		if strings.Contains(lower, "proxyenable") && (strings.Contains(lower, "0x1") || regexp.MustCompile(`(?m)\s1\s*//go:build windows
+
+package main
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"math/bits"
+	"net"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// Windows IP_UNICAST_IF. Microsoft documents this socket option as selecting
+// the outgoing interface for IPv4 unicast traffic on multihomed systems.
+const ipUnicastIf = 31
+
+type HTTPProbeDetail struct {
+	Name       string
+	URL        string
+	Reached    bool // a real HTTP response was received
+	Valid      bool // response proves normal public internet for this target
+	StatusCode int
+	Detail     string
+}
+
+type SystemProbeResult struct {
+	Online             bool
+	HTTPAttempted      int
+	ValidHTTP          int
+	ReachedHTTP        int
+	TCPAttempted       int
+	TCPFallbackSuccess int
+	CaptiveSuspected   bool
+	Details            []HTTPProbeDetail
+}
+
+type VPNStatus struct {
+	Detected        bool
+	LocalPortOpen   bool
+	ProxyUpstreamOK bool
+	ProxyProtocol   string
+	AdapterHints    []string
+	RouteHints      []string
+	ProxyHints      []string
+	Signals         []string
+}
+
+type WiFiUnderlayStatus struct {
+	IPv4              net.IP
+	InterfaceIndex    int
+	Gateway           net.IP
+	GatewayReachable  bool
+	GatewayNeighbor   bool
+	DirectProbeOK     bool
+	StructuralHealthy bool
+	StrongFault       bool
+	Reason            string
+}
+
+type NetworkAssessment struct {
+	WiFi             wifiInfo
+	System           SystemProbeResult
+	VPN              VPNStatus
+	DeepChecked      bool
+	Underlay         WiFiUnderlayStatus
+	Online           bool
+	ShouldRepairWiFi bool
+	VPNProtected     bool
+	CaptiveProtected bool
+	Reason           string
+}
+
+func newSystemHTTPClient(timeout time.Duration) *http.Client {
+	d := &net.Dialer{Timeout: timeout}
+	tr := &http.Transport{
+		Proxy:                 nil, // TUN routing still applies; avoid env-proxy ambiguity.
+		DialContext:           d.DialContext,
+		ForceAttemptHTTP2:     false,
+		DisableKeepAlives:     true,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+	}
+	return &http.Client{
+		Transport: tr,
+		Timeout:   timeout + time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func probeHTTP(ctx context.Context, client *http.Client, name, url string, validator func(int, string) bool) HTTPProbeDetail {
+	out := HTTPProbeDetail{Name: name, URL: url}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		out.Detail = err.Error()
+		return out
+	}
+	req.Header.Set("User-Agent", "WiFiWatchdog/"+appVersion)
+	resp, err := client.Do(req)
+	if err != nil {
+		out.Detail = err.Error()
+		return out
+	}
+	defer resp.Body.Close()
+	out.Reached = true
+	out.StatusCode = resp.StatusCode
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	text := string(body)
+	out.Valid = validator(resp.StatusCode, text)
+	if out.Valid {
+		out.Detail = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	} else {
+		out.Detail = fmt.Sprintf("HTTP %d unexpected", resp.StatusCode)
+	}
+	return out
+}
+
+func (a *App) systemInternetProbe() SystemProbeResult {
+	c := a.getConfig()
+	timeout := time.Duration(c.ConnectionTimeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+1500*time.Millisecond)
+	defer cancel()
+	client := newSystemHTTPClient(timeout)
+
+	type target struct {
+		name string
+		url  string
+		v    func(int, string) bool
+	}
+	targets := []target{
+		{
+			name: "Microsoft-NCSI",
+			url:  "http://www.msftconnecttest.com/connecttest.txt",
+			v: func(code int, body string) bool {
+				return code == 200 && strings.Contains(body, "Microsoft Connect Test")
+			},
+		},
+		{
+			name: "Google-204",
+			url:  "http://www.gstatic.com/generate_204",
+			v: func(code int, body string) bool {
+				return code == 204
+			},
+		},
+		{
+			name: "Microsoft-HTTPS",
+			url:  "https://www.microsoft.com/",
+			v: func(code int, body string) bool {
+				return code >= 200 && code < 400
+			},
+		},
+		{
+			name: "Baidu-HTTPS",
+			url:  "https://www.baidu.com/",
+			v: func(code int, body string) bool {
+				return code >= 200 && code < 400
+			},
+		},
+	}
+
+	ch := make(chan HTTPProbeDetail, len(targets))
+	for _, t := range targets {
+		t := t
+		go func() { ch <- probeHTTP(ctx, client, t.name, t.url, t.v) }()
+	}
+
+	r := SystemProbeResult{HTTPAttempted: len(targets), Details: make([]HTTPProbeDetail, 0, len(targets))}
+	plainUnexpected := false
+	for range targets {
+		d := <-ch
+		r.Details = append(r.Details, d)
+		if d.Reached {
+			r.ReachedHTTP++
+		}
+		if d.Valid {
+			r.ValidHTTP++
+			r.Online = true
+			// A single validated public response is already strong proof of usable
+			// system Internet. Cancel slower endpoints (for example a blocked
+			// regional target) instead of making every healthy check wait for them.
+			cancel()
+			return r
+		}
+		if d.Reached && !d.Valid && (d.Name == "Microsoft-NCSI" || d.Name == "Google-204") {
+			plainUnexpected = true
+		}
+	}
+
+	// If HTTP is filtered but raw public TCP is reachable, still prefer a
+	// false-negative-avoiding "online/degraded" result over resetting Wi-Fi.
+	tcpTargets := []string{"1.1.1.1:443", "223.5.5.5:53"}
+	r.TCPAttempted = len(tcpTargets)
+	tcpCh := make(chan bool, len(tcpTargets))
+	for _, addr := range tcpTargets {
+		addr := addr
+		go func() {
+			d := net.Dialer{Timeout: timeout}
+			conn, err := d.Dial("tcp4", addr)
+			if err == nil {
+				_ = conn.Close()
+				tcpCh <- true
+				return
+			}
+			tcpCh <- false
+		}()
+	}
+	for range tcpTargets {
+		if <-tcpCh {
+			r.TCPFallbackSuccess++
+			r.Online = true
+			return r
+		}
+	}
+	if plainUnexpected {
+		r.CaptiveSuspected = true
+	}
+	return r
+}
+
+func (a *App) logSystemProbe(r SystemProbeResult) {
+	parts := make([]string, 0, len(r.Details))
+	for _, d := range r.Details {
+		state := "失败"
+		if d.Valid {
+			state = "成功"
+		} else if d.Reached {
+			state = "有响应但不符合预期"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", d.Name, state))
+	}
+	a.logger.info(fmt.Sprintf("系统互联网探测：HTTP有效=%d/%d，TCP兜底=%d/%d，Online=%v；%s",
+		r.ValidHTTP, r.HTTPAttempted, r.TCPFallbackSuccess, r.TCPAttempted, r.Online, strings.Join(parts, ", ")))
+}
+
+func localPortOpen(port int, timeout time.Duration) bool {
+	if port <= 0 || port > 65535 {
+		return false
+	}
+	addrs := []string{
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		net.JoinHostPort("::1", strconv.Itoa(port)),
+	}
+	for _, addr := range addrs {
+		c, err := net.DialTimeout("tcp", addr, timeout)
+		if err == nil {
+			_ = c.Close()
+			return true
+		}
+	}
+	return false
+}
+
+type localProxyProbeResult struct {
+	Listening bool
+	Protocol  string
+	Upstream  bool
+}
+
+func probeHTTPConnectProxy(port int, timeout time.Duration) localProxyProbeResult {
+	r := localProxyProbeResult{}
+	if port <= 0 || port > 65535 {
+		return r
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
+	if err != nil {
+		return r
+	}
+	defer conn.Close()
+	r.Listening = true
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	_, err = io.WriteString(conn, "CONNECT www.microsoft.com:443 HTTP/1.1\r\nHost: www.microsoft.com:443\r\nProxy-Connection: close\r\n\r\n")
+	if err != nil {
+		return r
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return r
+	}
+	if strings.HasPrefix(line, "HTTP/") {
+		r.Protocol = "HTTP-CONNECT"
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "200" {
+			r.Upstream = true
+		}
+	}
+	return r
+}
+
+func probeSOCKS5Proxy(port int, timeout time.Duration) localProxyProbeResult {
+	r := localProxyProbeResult{}
+	if port <= 0 || port > 65535 {
+		return r
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
+	if err != nil {
+		return r
+	}
+	defer conn.Close()
+	r.Listening = true
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		return r
+	}
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil || resp[0] != 0x05 || resp[1] != 0x00 {
+		return r
+	}
+	r.Protocol = "SOCKS5"
+	// CONNECT 1.1.1.1:443; a successful SOCKS reply proves the proxy core can
+	// reach an external endpoint even if the TUN route itself is malfunctioning.
+	req := []byte{0x05, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xbb}
+	if _, err := conn.Write(req); err != nil {
+		return r
+	}
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil || head[0] != 0x05 {
+		return r
+	}
+	if head[1] == 0x00 {
+		r.Upstream = true
+	}
+	return r
+}
+
+func probeLocalProxy(port int, timeout time.Duration) localProxyProbeResult {
+	if port <= 0 || port > 65535 {
+		return localProxyProbeResult{}
+	}
+	// mixed-port implementations generally accept HTTP CONNECT; try it first.
+	h := probeHTTPConnectProxy(port, timeout)
+	if h.Protocol != "" || h.Upstream {
+		return h
+	}
+	s := probeSOCKS5Proxy(port, timeout)
+	if s.Protocol != "" || s.Upstream {
+		return s
+	}
+	// Keep the listening signal even if the port is an API/control port or uses
+	// another protocol.
+	return localProxyProbeResult{Listening: h.Listening || s.Listening || localPortOpen(port, timeout)}
+}
+
+var vpnNameRE = regexp.MustCompile(`(?i)(^|[^a-z])(tun|wintun|wireguard|mihomo|clash|sing[- ]?box|openvpn|tap[- ]?windows|tailscale|zerotier|vpn)([^a-z]|$)`)
+
+func vpnAdapterHints(wifiAlias string) []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || strings.EqualFold(strings.TrimSpace(iface.Name), strings.TrimSpace(wifiAlias)) {
+			continue
+		}
+		if vpnNameRE.MatchString(iface.Name) {
+			out = append(out, fmt.Sprintf("adapter:%s(ifIndex=%d)", iface.Name, iface.Index))
+		}
+	}
+	return out
+}
+
+func vpnAdapterDescriptionHints(wifiAlias string) []string {
+	script := `$ErrorActionPreference='SilentlyContinue'; Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "$($_.Name)$([char]9)$($_.InterfaceDescription)$([char]9)$($_.ifIndex)" }`
+	out, err := powershellEncoded(script, 6*time.Second)
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	var hints []string
+	for _, raw := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
+		fields := strings.Split(strings.TrimSpace(raw), "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		description := strings.TrimSpace(fields[1])
+		if strings.EqualFold(name, strings.TrimSpace(wifiAlias)) {
+			continue
+		}
+		if vpnNameRE.MatchString(name + " " + description) {
+			ifIndex := ""
+			if len(fields) >= 3 {
+				ifIndex = strings.TrimSpace(fields[2])
+			}
+			hints = append(hints, fmt.Sprintf("adapter-description:%s/%s(ifIndex=%s)", name, description, ifIndex))
+		}
+	}
+	return hints
+}
+
+).MatchString(lower)) {
+			hints = append(hints, "wininet-proxy:enabled")
+		}
+	}
+	if out, ok := query("AutoConfigURL"); ok {
+		for _, raw := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
+			fields := strings.Fields(raw)
+			if len(fields) >= 3 && strings.EqualFold(fields[0], "AutoConfigURL") {
+				// Deliberately do not log the PAC URL; its presence is enough to
+				// raise the evidence threshold before modifying Wi-Fi.
+				hints = append(hints, "wininet-pac:configured")
+				break
+			}
+		}
+	}
+	if out, ok := query("AutoDetect"); ok {
+		lower := strings.ToLower(string(out))
+		if strings.Contains(lower, "autodetect") && strings.Contains(lower, "0x1") {
+			hints = append(hints, "wininet-autodetect:enabled")
+		}
+	}
+	return hints
+}
+
 func vpnRouteHints() []string {
 	out, err := runHiddenTimeout(8*time.Second, "route.exe", "print", "-4")
 	if err != nil && len(out) == 0 {
@@ -447,8 +880,10 @@ func (a *App) detectVPNStatus(wifi wifiInfo) VPNStatus {
 		v.AdapterHints = vpnAdapterDescriptionHints(wifi.InterfaceName)
 	}
 	v.RouteHints = vpnRouteHints()
+	v.ProxyHints = windowsProxyHints()
 	v.Signals = append(v.Signals, v.AdapterHints...)
 	v.Signals = append(v.Signals, v.RouteHints...)
+	v.Signals = append(v.Signals, v.ProxyHints...)
 	v.Detected = len(v.Signals) > 0
 	return v
 }
