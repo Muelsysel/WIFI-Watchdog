@@ -232,6 +232,7 @@ var (
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	procCreateMutexW     = kernel32.NewProc("CreateMutexW")
 	procCloseHandle      = kernel32.NewProc("CloseHandle")
+	procMoveFileExW      = kernel32.NewProc("MoveFileExW")
 
 	procGetStockObject = gdi32.NewProc("GetStockObject")
 )
@@ -500,6 +501,8 @@ func loadConfig(path string) Config {
 		return c
 	}
 	if json.Unmarshal(b, &c) != nil {
+		backup := path + ".invalid-" + time.Now().Format("20060102-150405") + ".json"
+		_ = os.Rename(path, backup)
 		return defaultConfig()
 	}
 	return normalizeConfig(c)
