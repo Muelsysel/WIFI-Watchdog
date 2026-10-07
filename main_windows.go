@@ -2015,9 +2015,9 @@ func main() {
 		if int32(r) == -1 || r == 0 {
 			break
 		}
-		a.settingsMu.Lock()
-		settingsHwnd := a.settingsHwnd
-		a.settingsMu.Unlock()
+		app.settingsMu.Lock()
+		settingsHwnd := app.settingsHwnd
+		app.settingsMu.Unlock()
 		if settingsHwnd != 0 {
 			if handled, _, _ := procIsDialogMessageW.Call(settingsHwnd, uintptr(unsafe.Pointer(&m))); handled != 0 {
 				continue
