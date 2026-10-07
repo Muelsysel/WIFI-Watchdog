@@ -205,6 +205,7 @@ var (
 	procGetMessageW          = user32.NewProc("GetMessageW")
 	procTranslateMessage     = user32.NewProc("TranslateMessage")
 	procDispatchMessageW     = user32.NewProc("DispatchMessageW")
+	procIsDialogMessageW     = user32.NewProc("IsDialogMessageW")
 	procPostQuitMessage      = user32.NewProc("PostQuitMessage")
 	procPostMessageW         = user32.NewProc("PostMessageW")
 	procLoadIconW            = user32.NewProc("LoadIconW")
@@ -1235,6 +1236,7 @@ type settingsControls struct {
 	vpnAware      uintptr
 	saveButton    uintptr
 	cancelButton  uintptr
+	refreshButton uintptr
 	statusLine    uintptr
 	summarySystem uintptr
 	summaryWiFi   uintptr
@@ -1333,7 +1335,7 @@ func (a *App) showSettings() {
 	sc.summarySystem = createChild(hwnd, "STATIC", "系统互联网：正在后台刷新…", 0, 28, 46, 560, 22, 0)
 	sc.summaryWiFi = createChild(hwnd, "STATIC", "Wi-Fi：正在后台读取…", 0, 28, 72, 690, 22, 0)
 	sc.summaryVPN = createChild(hwnd, "STATIC", "VPN/TUN：正在后台检测…", 0, 28, 98, 690, 22, 0)
-	createChild(hwnd, "BUTTON", "刷新状态", BS_PUSHBUTTON|WS_TABSTOP, 596, 42, 74, 29, ID_BUTTON_REFRESH)
+	sc.refreshButton = createChild(hwnd, "BUTTON", "刷新状态", BS_PUSHBUTTON|WS_TABSTOP, 596, 42, 74, 29, ID_BUTTON_REFRESH)
 	createChild(hwnd, "BUTTON", "诊断报告", BS_PUSHBUTTON|WS_TABSTOP, 676, 42, 74, 29, ID_BUTTON_DIAG)
 	createChild(hwnd, "STATIC", "状态刷新、计划任务查询和配置保存都在后台执行，不会再阻塞窗口消息循环。", 0, 28, 126, 700, 22, 0)
 
@@ -1424,6 +1426,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	}
 	sc.refreshing = true
 	sc.mu.Unlock()
+	procEnableWindow.Call(sc.refreshButton, 0)
 	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
 
 	a.workers.Add(1)
@@ -1479,7 +1482,13 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 	startupErr := sc.startupErr
 	startupTouched := sc.startupTouched
 	sc.mu.Unlock()
+	procEnableWindow.Call(sc.refreshButton, 1)
 	if !ready {
+		if startupErr != "" {
+			setControlText(sc.statusLine, "状态刷新失败："+startupErr)
+		} else {
+			setControlText(sc.statusLine, "状态刷新未完成，请稍后重试。")
+		}
 		return
 	}
 
@@ -2005,6 +2014,14 @@ func main() {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) == -1 || r == 0 {
 			break
+		}
+		a.settingsMu.Lock()
+		settingsHwnd := a.settingsHwnd
+		a.settingsMu.Unlock()
+		if settingsHwnd != 0 {
+			if handled, _, _ := procIsDialogMessageW.Call(settingsHwnd, uintptr(unsafe.Pointer(&m))); handled != 0 {
+				continue
+			}
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
