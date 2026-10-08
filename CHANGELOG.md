@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.1-rc.1 — Mihomo/TUN-aware diagnostics
+
+- Add local-only, read-only Mihomo controller inspection (`/version`, `/configs`), including explicit authentication state, effective Rule/Global/Direct mode, runtime TUN flag and actual mixed port.
+- Default controller port 9097, optional and disabled by setting 0; controller TCP unavailability is **unknown** (Clash Verge Rev can use a Windows named pipe).
+- Secret is provided only through the optional `WIFI_WATCHDOG_MIHOMO_SECRET` environment variable, never hardcoded or written to config/logs.
+- Validate public HTTPS through the actual mixed proxy; do not treat a successful CONNECT handshake alone as working Internet.
+- Protect associated physical Wi-Fi from intrusive resets when authenticated mixed-proxy HTTPS works but TUN/system routing fails.
+- Protect Wi-Fi with IPv4 from ambiguous ICMP/ARP/bound-route failures in confirmed VPN/TUN environments.
+- Add Win11 control-center fields for controller and mixed-proxy ports, mock Mihomo API tests, authentication/redirect tests and negative proxy-connect tests.
+
 ## v1.5.0-rc.1 — Windows 11 hardening candidate
 
 - Fail closed when SSID/Profile is hidden or mismatched. A matching adapter GUID alone is no longer treated as the same Wi-Fi network.

@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-var appVersion = "1.5.0-rc.1"
+var appVersion = "1.5.1-rc.1"
 
 type RecoveryTarget struct {
 	ProfileName          string    `json:"profileName"`
@@ -781,7 +781,7 @@ func (a *App) generateDiagnosticReport() string {
 	appendCommandReport(&b, "route print -4", 30*time.Second, "route.exe", "print", "-4")
 	appendCommandReport(&b, "arp -a", 15*time.Second, "arp.exe", "-a")
 	appendCommandReport(&b, "WinHTTP proxy", 15*time.Second, "netsh.exe", "winhttp", "show", "proxy")
-	b.WriteString("\r\n===== v1.4 VPN/TUN-aware assessment =====\r\n")
+	b.WriteString("\r\n===== v1.5.1 Mihomo/TUN-aware assessment =====\r\n")
 	assessment := a.assessNetwork()
 	ab, _ := json.MarshalIndent(assessment, "", "  ")
 	b.WriteString(string(ab) + "\r\n")

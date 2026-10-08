@@ -114,27 +114,28 @@ const (
 	ID_MENU_REMEMBER = 1008
 	ID_MENU_DIAG     = 1009
 
-	ID_EDIT_NORMAL_MINUTES  = 2001
-	ID_EDIT_FAILURE_SECONDS = 2002
-	ID_EDIT_FAILURE_COUNT   = 2003
-	ID_EDIT_REPAIR_MINUTES  = 2004
-	ID_EDIT_DISABLE_SECONDS = 2005
-	ID_EDIT_STARTUP_SECONDS = 2006
-	ID_CHECK_STARTUP        = 2007
-	ID_BUTTON_SAVE          = 2008
-	ID_BUTTON_CANCEL        = 2009
-	ID_EDIT_CONNECT_RETRY   = 2010
-	ID_EDIT_CONNECT_DELAY   = 2011
-	ID_EDIT_DHCP_WAIT       = 2012
-	ID_CHECK_AUTO_RECONNECT = 2013
-	ID_CHECK_WLANSVC        = 2014
-	ID_CHECK_VPN_AWARE      = 2015
-	ID_EDIT_VPN_PORT        = 2016
-	ID_BUTTON_REFRESH       = 2017
-	ID_BUTTON_DEFAULTS      = 2018
-	ID_BUTTON_DIAG          = 2019
-	ID_EDIT_TIMEOUT_SECONDS = 2020
-	ID_EDIT_LOG_RETENTION   = 2021
+	ID_EDIT_NORMAL_MINUTES    = 2001
+	ID_EDIT_FAILURE_SECONDS   = 2002
+	ID_EDIT_FAILURE_COUNT     = 2003
+	ID_EDIT_REPAIR_MINUTES    = 2004
+	ID_EDIT_DISABLE_SECONDS   = 2005
+	ID_EDIT_STARTUP_SECONDS   = 2006
+	ID_CHECK_STARTUP          = 2007
+	ID_BUTTON_SAVE            = 2008
+	ID_BUTTON_CANCEL          = 2009
+	ID_EDIT_CONNECT_RETRY     = 2010
+	ID_EDIT_CONNECT_DELAY     = 2011
+	ID_EDIT_DHCP_WAIT         = 2012
+	ID_CHECK_AUTO_RECONNECT   = 2013
+	ID_CHECK_WLANSVC          = 2014
+	ID_CHECK_VPN_AWARE        = 2015
+	ID_EDIT_VPN_PORT          = 2016
+	ID_BUTTON_REFRESH         = 2017
+	ID_BUTTON_DEFAULTS        = 2018
+	ID_BUTTON_DIAG            = 2019
+	ID_EDIT_TIMEOUT_SECONDS   = 2020
+	ID_EDIT_LOG_RETENTION     = 2021
+	ID_EDIT_MIHOMO_CONTROLLER = 2022
 )
 
 type point struct {
@@ -280,6 +281,7 @@ type Config struct {
 	EnableWlanServiceRestart    bool `json:"enableWlanServiceRestart"`
 	EnableVPNAware              bool `json:"enableVpnAware"`
 	VPNLocalPort                int  `json:"vpnLocalPort"`
+	MihomoControllerPort        int  `json:"mihomoControllerPort"`
 	LogRetentionDays            int  `json:"logRetentionDays"`
 	StartWithWindows            bool `json:"startWithWindows"`
 }
@@ -299,7 +301,8 @@ func defaultConfig() Config {
 		AutoReconnectDisconnected:   false,
 		EnableWlanServiceRestart:    false,
 		EnableVPNAware:              true,
-		VPNLocalPort:                0,
+		VPNLocalPort:                0,    // auto-discover when the controller is available
+		MihomoControllerPort:        9097, // TCP API may be disabled in Clash Verge Rev
 		LogRetentionDays:            30,
 		StartWithWindows:            false,
 	}
@@ -317,6 +320,7 @@ func normalizeConfig(c Config) Config {
 	c.ConnectRetryDelaySeconds = clamp(c.ConnectRetryDelaySeconds, 1, 60)
 	c.DHCPRenewWaitSeconds = clamp(c.DHCPRenewWaitSeconds, 1, 120)
 	c.VPNLocalPort = clamp(c.VPNLocalPort, 0, 65535)
+	c.MihomoControllerPort = clamp(c.MihomoControllerPort, 0, 65535)
 	c.LogRetentionDays = clamp(c.LogRetentionDays, 1, 3650)
 	return c
 }
@@ -1400,7 +1404,7 @@ func (a *App) runSettingsThread() {
 
 	screenW, _, _ := procGetSystemMetrics.Call(0)
 	screenH, _, _ := procGetSystemMetrics.Call(1)
-	width, height := int32(780), int32(720)
+	width, height := int32(780), int32(770)
 	x := int32(screenW)/2 - width/2
 	y := int32(screenH)/2 - height/2
 
@@ -1448,14 +1452,15 @@ func (a *App) runSettingsThread() {
 		{"Profile 重试次数", ID_EDIT_CONNECT_RETRY, c.ConnectRetryCount, "次"},
 		{"每次连接等待", ID_EDIT_CONNECT_DELAY, c.ConnectRetryDelaySeconds, "秒"},
 		{"DHCP 更新等待", ID_EDIT_DHCP_WAIT, c.DHCPRenewWaitSeconds, "秒"},
-		{"VPN/TUN 本地端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=不探测"},
+		{"混合代理端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=自动"},
+		{"Mihomo 控制端口", ID_EDIT_MIHOMO_CONTROLLER, c.MihomoControllerPort, "0=禁用"},
 		{"单次探测超时", ID_EDIT_TIMEOUT_SECONDS, c.ConnectionTimeoutSeconds, "秒"},
 		{"日志保留时间", ID_EDIT_LOG_RETENTION, c.LogRetentionDays, "天"},
 	}
 
 	for i, r := range rows {
-		col := i / 6
-		rowIndex := i % 6
+		col := i / 7
+		rowIndex := i % 7
 		baseX := int32(28)
 		if col == 1 {
 			baseX = 398
@@ -1467,25 +1472,25 @@ func (a *App) runSettingsThread() {
 		createChild(hwnd, "STATIC", r.unit, 0, baseX+240, yy+4, 74, 24, 0)
 	}
 
-	createChild(hwnd, "STATIC", "安全策略", 0, 24, 414, 160, 24, 0)
-	sc.vpnAware = createChild(hwnd, "BUTTON", "启用 VPN/TUN 保护：系统有网或底层证据不足时不重启 Wi-Fi", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 446, 650, 26, ID_CHECK_VPN_AWARE)
+	createChild(hwnd, "STATIC", "安全策略", 0, 24, 450, 160, 24, 0)
+	sc.vpnAware = createChild(hwnd, "BUTTON", "启用 VPN/TUN 保护：系统有网或底层证据不足时不重启 Wi-Fi", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 482, 650, 26, ID_CHECK_VPN_AWARE)
 	setCheck(sc.vpnAware, c.EnableVPNAware)
 
-	sc.autoReconnect = createChild(hwnd, "BUTTON", "Wi-Fi 意外断开时主动连接上一次成功的 WLAN Profile", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 478, 620, 26, ID_CHECK_AUTO_RECONNECT)
+	sc.autoReconnect = createChild(hwnd, "BUTTON", "Wi-Fi 意外断开时主动连接上一次成功的 WLAN Profile", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 514, 620, 26, ID_CHECK_AUTO_RECONNECT)
 	setCheck(sc.autoReconnect, c.AutoReconnectDisconnected)
 
-	sc.wlanSvc = createChild(hwnd, "BUTTON", "启用 WlanSvc 服务重启作为最后兜底（高级，默认关闭）", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 510, 620, 26, ID_CHECK_WLANSVC)
+	sc.wlanSvc = createChild(hwnd, "BUTTON", "启用 WlanSvc 服务重启作为最后兜底（高级，默认关闭）", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 546, 620, 26, ID_CHECK_WLANSVC)
 	setCheck(sc.wlanSvc, c.EnableWlanServiceRestart)
 
-	sc.startup = createChild(hwnd, "BUTTON", "Windows 登录后自动启动（最高权限计划任务）", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 542, 620, 26, ID_CHECK_STARTUP)
+	sc.startup = createChild(hwnd, "BUTTON", "Windows 登录后自动启动（最高权限计划任务）", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 578, 620, 26, ID_CHECK_STARTUP)
 	setCheck(sc.startup, c.StartWithWindows)
 
-	createChild(hwnd, "STATIC", "提示：恢复冷却会持久化到 state.json；即使重启程序，也不会绕过两次自动恢复之间的最小间隔。", 0, 28, 578, 710, 22, 0)
-	sc.statusLine = createChild(hwnd, "STATIC", "正在后台核对开机自启状态和网络状态…", 0, 28, 606, 710, 22, 0)
+	createChild(hwnd, "STATIC", "提示：恢复冷却会持久化到 state.json；即使重启程序，也不会绕过两次自动恢复之间的最小间隔。", 0, 28, 614, 710, 22, 0)
+	sc.statusLine = createChild(hwnd, "STATIC", "正在后台核对开机自启状态和网络状态…", 0, 28, 642, 710, 22, 0)
 
-	createChild(hwnd, "BUTTON", "恢复默认参数", BS_PUSHBUTTON|WS_TABSTOP, 28, 642, 112, 31, ID_BUTTON_DEFAULTS)
-	sc.saveButton = createChild(hwnd, "BUTTON", "保存", BS_DEFPUSHBUTTON|WS_TABSTOP, 568, 642, 86, 31, ID_BUTTON_SAVE)
-	sc.cancelButton = createChild(hwnd, "BUTTON", "取消", BS_PUSHBUTTON|WS_TABSTOP, 664, 642, 86, 31, ID_BUTTON_CANCEL)
+	createChild(hwnd, "BUTTON", "恢复默认参数", BS_PUSHBUTTON|WS_TABSTOP, 28, 678, 112, 31, ID_BUTTON_DEFAULTS)
+	sc.saveButton = createChild(hwnd, "BUTTON", "保存", BS_DEFPUSHBUTTON|WS_TABSTOP, 568, 678, 86, 31, ID_BUTTON_SAVE)
+	sc.cancelButton = createChild(hwnd, "BUTTON", "取消", BS_PUSHBUTTON|WS_TABSTOP, 664, 678, 86, 31, ID_BUTTON_CANCEL)
 
 	a.settingsMu.Lock()
 	a.settingsHwnd = hwnd
@@ -1681,11 +1686,22 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 		if len([]rune(detail)) > 75 {
 			detail = string([]rune(detail)[:75]) + "…"
 		}
-		setControlText(sc.summaryVPN, "VPN/TUN：已检测到 · "+detail)
+		if n.VPN.Mihomo.Available {
+			if n.VPN.Mihomo.Authenticated {
+				detail = fmt.Sprintf("Mihomo API 正常; mode=%s tun=%t; mixed=%d; HTTPS=%t", n.VPN.Mihomo.Mode, n.VPN.Mihomo.TunEnabled, n.VPN.EffectivePort, n.VPN.ProxyUpstreamOK)
+			} else if n.VPN.Mihomo.Unauthorized {
+				detail = "Mihomo 控制接口可达，但缺少正确的 Secret；Wi-Fi 保护仍有效"
+			}
+		}
+		setControlText(sc.summaryVPN, "VPN/TUN："+detail)
 	} else if n.Online && !n.DeepChecked {
 		setControlText(sc.summaryVPN, "VPN/TUN：系统在线，未执行深度检测（无需影响 Wi-Fi 判定）")
 	} else {
-		setControlText(sc.summaryVPN, "VPN/TUN：未检测到明显信号")
+		if n.DeepChecked {
+			setControlText(sc.summaryVPN, "VPN/TUN：未确认控制接口；9097 不监听不等于 Mihomo 已停止")
+		} else {
+			setControlText(sc.summaryVPN, "VPN/TUN：未执行深度探测")
+		}
 	}
 	if startupKnown && !startupTouched {
 		setCheck(sc.startup, startupEnabled)
@@ -1728,6 +1744,7 @@ func (a *App) collectSettings(hwnd uintptr) (Config, error) {
 		{ID_EDIT_CONNECT_DELAY, 1, 60, func(v int) { c.ConnectRetryDelaySeconds = v }},
 		{ID_EDIT_DHCP_WAIT, 1, 120, func(v int) { c.DHCPRenewWaitSeconds = v }},
 		{ID_EDIT_VPN_PORT, 0, 65535, func(v int) { c.VPNLocalPort = v }},
+		{ID_EDIT_MIHOMO_CONTROLLER, 0, 65535, func(v int) { c.MihomoControllerPort = v }},
 		{ID_EDIT_TIMEOUT_SECONDS, 1, 30, func(v int) { c.ConnectionTimeoutSeconds = v }},
 		{ID_EDIT_LOG_RETENTION, 1, 3650, func(v int) { c.LogRetentionDays = v }},
 	}
@@ -1847,18 +1864,19 @@ func (a *App) restoreSettingsDefaults(hwnd uintptr) {
 	sc := v.(*settingsControls)
 	d := defaultConfig()
 	values := map[int]int{
-		ID_EDIT_NORMAL_MINUTES:  d.NormalCheckIntervalMinutes,
-		ID_EDIT_FAILURE_SECONDS: d.FailureCheckIntervalSeconds,
-		ID_EDIT_FAILURE_COUNT:   d.FailureThreshold,
-		ID_EDIT_REPAIR_MINUTES:  d.RepairRetryIntervalMinutes,
-		ID_EDIT_DISABLE_SECONDS: d.WifiDisableWaitSeconds,
-		ID_EDIT_STARTUP_SECONDS: d.WifiStartupWaitSeconds,
-		ID_EDIT_CONNECT_RETRY:   d.ConnectRetryCount,
-		ID_EDIT_CONNECT_DELAY:   d.ConnectRetryDelaySeconds,
-		ID_EDIT_DHCP_WAIT:       d.DHCPRenewWaitSeconds,
-		ID_EDIT_VPN_PORT:        d.VPNLocalPort,
-		ID_EDIT_TIMEOUT_SECONDS: d.ConnectionTimeoutSeconds,
-		ID_EDIT_LOG_RETENTION:   d.LogRetentionDays,
+		ID_EDIT_NORMAL_MINUTES:    d.NormalCheckIntervalMinutes,
+		ID_EDIT_FAILURE_SECONDS:   d.FailureCheckIntervalSeconds,
+		ID_EDIT_FAILURE_COUNT:     d.FailureThreshold,
+		ID_EDIT_REPAIR_MINUTES:    d.RepairRetryIntervalMinutes,
+		ID_EDIT_DISABLE_SECONDS:   d.WifiDisableWaitSeconds,
+		ID_EDIT_STARTUP_SECONDS:   d.WifiStartupWaitSeconds,
+		ID_EDIT_CONNECT_RETRY:     d.ConnectRetryCount,
+		ID_EDIT_CONNECT_DELAY:     d.ConnectRetryDelaySeconds,
+		ID_EDIT_DHCP_WAIT:         d.DHCPRenewWaitSeconds,
+		ID_EDIT_VPN_PORT:          d.VPNLocalPort,
+		ID_EDIT_MIHOMO_CONTROLLER: d.MihomoControllerPort,
+		ID_EDIT_TIMEOUT_SECONDS:   d.ConnectionTimeoutSeconds,
+		ID_EDIT_LOG_RETENTION:     d.LogRetentionDays,
 	}
 	for id, value := range values {
 		setControlText(sc.edits[id], strconv.Itoa(value))
