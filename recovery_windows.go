@@ -501,24 +501,34 @@ func (a *App) setAdapterEnabledPowerShell(t RecoveryTarget, enabled bool) error 
 	return nil
 }
 
+func (a *App) setAdapterEnabledSafe(t RecoveryTarget, enabled bool) error {
+	if t.InterfaceGUID != "" {
+		// When the stable GUID is known, do not try a possibly stale alias first.
+		// A stale alias can refer to another physical adapter after driver changes.
+		return a.setAdapterEnabledPowerShell(t, enabled)
+	}
+	if t.InterfaceName == "" {
+		return fmt.Errorf("no verified adapter alias or GUID")
+	}
+	err := a.setAdapterEnabledNetsh(t.InterfaceName, enabled)
+	if err == nil {
+		return nil
+	}
+	a.logger.warn("netsh 无法修改网卡，按目标别名尝试 PowerShell：" + err.Error())
+	return a.setAdapterEnabledPowerShell(t, enabled)
+}
+
 func (a *App) restartAdapter(t RecoveryTarget) bool {
 	c := a.getConfig()
-	alias := t.InterfaceName
-	if alias == "" && t.InterfaceGUID == "" {
+	if t.InterfaceName == "" && t.InterfaceGUID == "" {
 		a.logger.warn("缺少目标网卡 GUID 与接口名称，禁止自动禁用未知网卡。")
 		return false
 	}
-	// Never borrow a netsh alias from an arbitrary adapter if only a stable
-	// GUID was remembered. In this case PowerShell selects the adapter by GUID.
 
 	a.logger.warn("兜底层：准备重启 Wi-Fi 网卡。")
-	err := a.setAdapterEnabledNetsh(alias, false)
-	if err != nil {
-		a.logger.warn("netsh 关闭网卡失败，尝试 PowerShell 兜底：" + err.Error())
-		if err = a.setAdapterEnabledPowerShell(t, false); err != nil {
-			a.logger.err("关闭 Wi-Fi 网卡失败：" + err.Error())
-			return false
-		}
+	if err := a.setAdapterEnabledSafe(t, false); err != nil {
+		a.logger.err("关闭 Wi-Fi 网卡失败：" + err.Error())
+		return false
 	}
 
 	// Once disabled, re-enable is a critical cleanup action. An application exit
@@ -530,13 +540,9 @@ func (a *App) restartAdapter(t RecoveryTarget) bool {
 	case <-time.After(time.Duration(c.WifiDisableWaitSeconds) * time.Second):
 	}
 
-	err = a.setAdapterEnabledNetsh(alias, true)
-	if err != nil {
-		a.logger.warn("netsh 开启网卡失败，尝试 PowerShell 兜底：" + err.Error())
-		if err = a.setAdapterEnabledPowerShell(t, true); err != nil {
-			a.logger.err("重新开启 Wi-Fi 网卡失败：" + err.Error())
-			return false
-		}
+	if err := a.setAdapterEnabledSafe(t, true); err != nil {
+		a.logger.err("重新开启 Wi-Fi 网卡失败：" + err.Error())
+		return false
 	}
 
 	a.logger.info("Wi-Fi 网卡已重新启用，等待驱动初始化。")
