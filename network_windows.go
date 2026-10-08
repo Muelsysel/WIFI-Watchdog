@@ -27,12 +27,14 @@ type HTTPProbeDetail struct {
 	Reached    bool // a real HTTP response was received
 	Valid      bool // response proves normal public internet for this target
 	StatusCode int
+	LatencyMs  int64 // total HTTP request time, including DNS/TLS
 	Detail     string
 }
 
 type SystemProbeResult struct {
 	Online             bool
-	HTTPAttempted      int
+	HTTPAttempted      int // scheduled/configured targets (not all necessarily evaluated)
+	FullScan           bool // true when every configured target was examined
 	ValidHTTP          int
 	ReachedHTTP        int
 	TCPAttempted       int
@@ -99,8 +101,10 @@ func newSystemHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-func probeHTTP(ctx context.Context, client *http.Client, name, url string, validator func(int, string) bool) HTTPProbeDetail {
-	out := HTTPProbeDetail{Name: name, URL: url}
+func probeHTTP(ctx context.Context, client *http.Client, name, url string, validator func(int, string) bool) (out HTTPProbeDetail) {
+	started := time.Now()
+	defer func() { out.LatencyMs = time.Since(started).Milliseconds() }()
+	out = HTTPProbeDetail{Name: name, URL: url}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		out.Detail = err.Error()
@@ -126,19 +130,68 @@ func probeHTTP(ctx context.Context, client *http.Client, name, url string, valid
 	return out
 }
 
+type systemHTTPTarget struct {
+	name string
+	url  string
+	v    func(int, string) bool
+}
+
+type indexedHTTPProbe struct {
+	index int
+	probe HTTPProbeDetail
+}
+
+// executeHTTPProbes has two explicit modes. In fast mode the first valid
+// response proves connectivity and the remaining results are UNVERIFIED, not
+// failures. Full mode waits for the result of every scheduled endpoint.
+// Both modes share the same bounded HTTP context and validation rules.
+func executeHTTPProbes(ctx context.Context, cancel context.CancelFunc, client *http.Client, targets []systemHTTPTarget, full bool) SystemProbeResult {
+	results := make(chan indexedHTTPProbe, len(targets))
+	for i, t := range targets {
+		i, t := i, t
+		go func() {
+			results <- indexedHTTPProbe{index: i, probe: probeHTTP(ctx, client, t.name, t.url, t.v)}
+		}()
+	}
+	r := SystemProbeResult{HTTPAttempted: len(targets), FullScan: full, Details: make([]HTTPProbeDetail, 0, len(targets))}
+	ordered := make([]HTTPProbeDetail, len(targets))
+	seen := make([]bool, len(targets))
+	for range targets {
+		d := <-results
+		ordered[d.index] = d.probe
+		seen[d.index] = true
+		if d.probe.Reached {
+			r.ReachedHTTP++
+		}
+		if d.probe.Valid {
+			r.ValidHTTP++
+			r.Online = true
+			if !full {
+				cancel() // cancel slow endpoints, do NOT count them as failed
+				break
+			}
+		}
+	}
+	for i, ok := range seen {
+		if ok {
+			r.Details = append(r.Details, ordered[i])
+		}
+	}
+	return r
+}
+
 func (a *App) systemInternetProbe() SystemProbeResult {
+	return a.systemInternetProbeMode(false)
+}
+
+func (a *App) systemInternetProbeMode(full bool) SystemProbeResult {
 	c := a.getConfig()
 	timeout := time.Duration(c.ConnectionTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+1500*time.Millisecond)
 	defer cancel()
 	client := newSystemHTTPClient(timeout)
 
-	type target struct {
-		name string
-		url  string
-		v    func(int, string) bool
-	}
-	targets := []target{
+	targets := []systemHTTPTarget{
 		{
 			name: "Microsoft-NCSI",
 			url:  "http://www.msftconnecttest.com/connecttest.txt",
@@ -169,29 +222,12 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 		},
 	}
 
-	ch := make(chan HTTPProbeDetail, len(targets))
-	for _, t := range targets {
-		t := t
-		go func() { ch <- probeHTTP(ctx, client, t.name, t.url, t.v) }()
+	r := executeHTTPProbes(ctx, cancel, client, targets, full)
+	if r.Online {
+		return r
 	}
-
-	r := SystemProbeResult{HTTPAttempted: len(targets), Details: make([]HTTPProbeDetail, 0, len(targets))}
 	plainUnexpected := false
-	for range targets {
-		d := <-ch
-		r.Details = append(r.Details, d)
-		if d.Reached {
-			r.ReachedHTTP++
-		}
-		if d.Valid {
-			r.ValidHTTP++
-			r.Online = true
-			// A single validated public response is already strong proof of usable
-			// system Internet. Cancel slower endpoints (for example a blocked
-			// regional target) instead of making every healthy check wait for them.
-			cancel()
-			return r
-		}
+	for _, d := range r.Details {
 		if d.Reached && !d.Valid && (d.Name == "Microsoft-NCSI" || d.Name == "Google-204") {
 			plainUnexpected = true
 		}
@@ -228,19 +264,49 @@ func (a *App) systemInternetProbe() SystemProbeResult {
 	return r
 }
 
-func (a *App) logSystemProbe(r SystemProbeResult) {
+func formatSystemProbeLog(r SystemProbeResult) string {
+	mode := "快速模式（首个有效结果即结束）"
+	if r.FullScan {
+		mode = "完整模式（逐项核验全部目标）"
+	}
+	unverified := r.HTTPAttempted - len(r.Details)
+	if unverified < 0 {
+		unverified = 0
+	}
+	failed := 0
+	unexpected := 0
 	parts := make([]string, 0, len(r.Details))
 	for _, d := range r.Details {
 		state := "失败"
 		if d.Valid {
 			state = "成功"
 		} else if d.Reached {
-			state = "有响应但不符合预期"
+			state = "响应异常"
+			unexpected++
+		} else {
+			failed++
 		}
-		parts = append(parts, fmt.Sprintf("%s=%s", d.Name, state))
+		detail := strings.ReplaceAll(strings.ReplaceAll(d.Detail, "\r", " "), "\n", " ")
+		if len(detail) > 160 {
+			detail = detail[:160] + "…"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s(HTTP=%d 耗时=%dms %s)",
+			d.Name, state, d.StatusCode, d.LatencyMs, detail))
 	}
-	a.logger.info(fmt.Sprintf("系统互联网探测：HTTP有效=%d/%d，TCP兜底=%d/%d，Online=%v；%s",
-		r.ValidHTTP, r.HTTPAttempted, r.TCPFallbackSuccess, r.TCPAttempted, r.Online, strings.Join(parts, ", ")))
+	if unverified > 0 {
+		parts = append(parts, fmt.Sprintf("另有%d项未统计（已提前结束，不代表失败）", unverified))
+	}
+	tcpStatus := "未执行"
+	if r.TCPAttempted > 0 {
+		tcpStatus = fmt.Sprintf("%d/%d", r.TCPFallbackSuccess, r.TCPAttempted)
+	}
+	return fmt.Sprintf("系统互联网探测[%s]：HTTP已统计=%d/%d，有效=%d，响应异常=%d，请求失败=%d，未统计=%d；TCP兜底=%s；Online=%t；%s",
+		mode, len(r.Details), r.HTTPAttempted, r.ValidHTTP, unexpected, failed, unverified,
+		tcpStatus, r.Online, strings.Join(parts, "；"))
+}
+
+func (a *App) logSystemProbe(r SystemProbeResult) {
+	a.logger.info(formatSystemProbeLog(r))
 }
 
 func localPortOpen(port int, timeout time.Duration) bool {
