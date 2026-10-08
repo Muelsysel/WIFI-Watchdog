@@ -33,7 +33,7 @@ type HTTPProbeDetail struct {
 
 type SystemProbeResult struct {
 	Online             bool
-	HTTPAttempted      int // scheduled/configured targets (not all necessarily evaluated)
+	HTTPAttempted      int  // scheduled/configured targets (not all necessarily evaluated)
 	FullScan           bool // true when every configured target was examined
 	ValidHTTP          int
 	ReachedHTTP        int
