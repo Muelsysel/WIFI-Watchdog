@@ -1,0 +1,77 @@
+name: Publish v1.6.0-rc.1 once
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/publish-v160-rc-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: a09f7531c6bd92e4423365d36e89ced3354bb25b
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify release source
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem . -Filter '*.go' -File | ForEach-Object { $_.FullName }
+          $unformatted = gofmt -l $files
+          if ($unformatted) { throw "gofmt required: $($unformatted -join ', ')" }
+          go test -count=1 -timeout 2m ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Windows binaries and archives
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $ldflags = "-H=windowsgui -s -w -X main.appVersion=1.6.0-rc.1"
+          foreach ($arch in @('amd64', 'arm64')) {
+            $env:GOARCH = $arch
+            $folder = "dist/WiFiWatchdog-windows-$arch"
+            New-Item -ItemType Directory -Force $folder | Out-Null
+            go build -trimpath -ldflags $ldflags -o "$folder/WiFiWatchdog.exe" .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Copy-Item README.md, README_EN.md, LICENSE, CHANGELOG.md, config.schema.json $folder
+            Copy-Item docs/CONFIGURATION.md, docs/TROUBLESHOOTING.md $folder
+            Compress-Archive -Path "$folder/*" -DestinationPath "dist/WiFiWatchdog-windows-$arch.zip" -Force
+          }
+          @(
+            'Version: v1.6.0-rc.1'
+            'Commit: a09f7531c6bd92e4423365d36e89ced3354bb25b'
+            "Go: $(go version)"
+            "Built UTC: $([DateTime]::UtcNow.ToString('o'))"
+          ) | Set-Content -Encoding utf8 dist/BUILDINFO.txt
+          Get-ChildItem dist/*.zip | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Add-Content -Encoding utf8 dist/SHA256SUMS.txt
+          }
+
+      - name: Create prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (gh release view v1.6.0-rc.1 2>$null) { exit 0 }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a v1.6.0-rc.1 a09f7531c6bd92e4423365d36e89ced3354bb25b -m 'WiFi Watchdog v1.6.0-rc.1'
+          git push origin v1.6.0-rc.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release create v1.6.0-rc.1 dist/*.zip dist/SHA256SUMS.txt dist/BUILDINFO.txt --prerelease --generate-notes --title 'WiFi Watchdog v1.6.0-rc.1 (Fluent Lite + low memory)'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
