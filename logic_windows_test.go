@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,5 +178,112 @@ func TestAtomicWriteFileReplacesExistingContent(t *testing.T) {
 	}
 	if string(got) != "new" {
 		t.Fatalf("unexpected content: %q", string(got))
+	}
+}
+
+func TestNetworkIdentityDoesNotUseAdapterAsNetworkProof(t *testing.T) {
+	current := wifiInfo{Connected: true, SSID: "new-network", InterfaceGUID: "{ABC}"}
+	remembered := RecoveryTarget{SSID: "old-network", ProfileName: "old-profile", InterfaceGUID: "{ABC}"}
+	if sameNetworkIdentity(current, remembered) {
+		t.Fatal("same adapter GUID must not prove same Wi-Fi network")
+	}
+	masked := wifiInfo{Connected: true, InterfaceGUID: "{ABC}"}
+	if sameNetworkIdentity(masked, remembered) {
+		t.Fatal("privacy-hidden SSID/Profile must not borrow a stale profile")
+	}
+}
+
+func TestTargetMatchesFailsClosedWhenIdentityUnavailable(t *testing.T) {
+	target := RecoveryTarget{SSID: "wanted", ProfileName: "wanted-profile"}
+	if targetMatches(wifiInfo{Connected: true, InterfaceGUID: "{ABC}"}, target) {
+		t.Fatal("unknown SSID/Profile cannot verify a target")
+	}
+	if targetMatches(wifiInfo{Connected: true, SSID: "other"}, target) {
+		t.Fatal("connection to a different SSID cannot verify a target")
+	}
+	if !targetMatches(wifiInfo{Connected: true, ProfileName: "wanted-profile"}, target) {
+		t.Fatal("matching saved WLAN profile should verify association")
+	}
+}
+
+func TestResolveTargetDoesNotCrossWirelessAdapters(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{dataDir: dir, logger: newLogger(filepath.Join(dir, "logs"), 30)}
+	a.rememberTarget(RecoveryTarget{ProfileName: "old-profile", SSID: "old", InterfaceGUID: "{111}"})
+	target := a.resolveTarget(wifiInfo{Connected: false, InterfaceGUID: "{222}"})
+	if target.ProfileName != "" || target.SSID != "" {
+		t.Fatalf("must not reconnect old profile on a different adapter: %+v", target)
+	}
+}
+
+func TestProtectConfirmedWiFiUnderlayEvenWithoutVPN(t *testing.T) {
+	n := NetworkAssessment{
+		System: SystemProbeResult{Online: false},
+		WiFi: wifiInfo{Connected: true, SSID: "campus"},
+		Underlay: WiFiUnderlayStatus{DirectProbeOK: true},
+	}
+	classifyNetworkAssessment(&n)
+	if !n.UnderlayProtected || n.ShouldRepairWiFi {
+		t.Fatalf("physical Wi-Fi direct reachability should protect adapter: %+v", n)
+	}
+}
+
+func TestNoAdapterEvidenceDoesNotAuthorizeRepair(t *testing.T) {
+	n := NetworkAssessment{System: SystemProbeResult{Online: false}}
+	classifyNetworkAssessment(&n)
+	if n.ShouldRepairWiFi {
+		t.Fatalf("missing adapter is not evidence to restart it: %+v", n)
+	}
+}
+
+func TestDailyLogIsCompactedToRecentTail(t *testing.T) {
+	dir := t.TempDir()
+	logger := newLogger(dir, 30)
+	path := logger.currentPath()
+	long := bytes.Repeat([]byte("line-abcdef\n"), maxDailyLogBytes/12+100)
+	if err := os.WriteFile(path, long, 0644); err != nil {
+		t.Fatal(err)
+	}
+	logger.info("new entry should survive compaction")
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stat.Size() > maxDailyLogBytes {
+		t.Fatalf("daily log not bounded: %d bytes", stat.Size())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte("new entry should survive compaction")) {
+		t.Fatal("compaction lost newest entry")
+	}
+}
+
+func TestDiagnosticCleanupIncludesHangAndCrash(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{dataDir: dir, cfg: defaultConfig(), logger: newLogger(filepath.Join(dir, "logs"), 30)}
+	diagnosticDir := a.diagnosticsDir()
+	if err := os.MkdirAll(diagnosticDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"hang-old.txt", "crash-old.txt", "diagnostics-old.txt"} {
+		path := filepath.Join(diagnosticDir, name)
+		if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		oldTime := time.Now().AddDate(0, 0, -90)
+		if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.cleanupOldDiagnostics(time.Now())
+	entries, err := os.ReadDir(diagnosticDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("old diagnostics remain: %v", entries)
 	}
 }
