@@ -95,7 +95,7 @@ func TestPersistedRepairCooldownSurvivesReload(t *testing.T) {
 func TestClassifyVPNProtectsHealthyWiFi(t *testing.T) {
 	n := NetworkAssessment{
 		System:   SystemProbeResult{Online: false},
-		WiFi:     wifiInfo{Connected: true},
+		WiFi:     wifiInfo{Connected: true, InterfaceName: "WLAN"},
 		VPN:      VPNStatus{Detected: true},
 		Underlay: WiFiUnderlayStatus{StructuralHealthy: true, StrongFault: false},
 	}
@@ -120,7 +120,7 @@ func TestClassifyRepairsDisconnectedWiFiEvenWithVPN(t *testing.T) {
 func TestClassifyCaptivePortalProtectsWiFi(t *testing.T) {
 	n := NetworkAssessment{
 		System:   SystemProbeResult{CaptiveSuspected: true},
-		WiFi:     wifiInfo{Connected: true},
+		WiFi:     wifiInfo{Connected: true, InterfaceName: "WLAN"},
 		Underlay: WiFiUnderlayStatus{StructuralHealthy: true},
 	}
 	classifyNetworkAssessment(&n)
@@ -219,7 +219,7 @@ func TestResolveTargetDoesNotCrossWirelessAdapters(t *testing.T) {
 func TestProtectConfirmedWiFiUnderlayEvenWithoutVPN(t *testing.T) {
 	n := NetworkAssessment{
 		System:   SystemProbeResult{Online: false},
-		WiFi:     wifiInfo{Connected: true, SSID: "campus"},
+		WiFi:     wifiInfo{Connected: true, InterfaceName: "WLAN", SSID: "campus"},
 		Underlay: WiFiUnderlayStatus{DirectProbeOK: true},
 	}
 	classifyNetworkAssessment(&n)
@@ -314,5 +314,17 @@ func TestFutureDatedCooldownNeverExceedsConfiguredInterval(t *testing.T) {
 	remaining := a.remainingAutoRepairCooldown(10 * time.Minute)
 	if remaining > 10*time.Minute || remaining < 9*time.Minute {
 		t.Fatalf("clock jump changed cooldown unexpectedly: %v", remaining)
+	}
+}
+
+func TestWin11UnknownInterfaceAliasCannotTriggerReset(t *testing.T) {
+	n := NetworkAssessment{
+		System: SystemProbeResult{Online: false},
+		WiFi:   wifiInfo{Connected: true, InterfaceGUID: "{ABC}"},
+		Underlay: WiFiUnderlayStatus{StrongFault: true},
+	}
+	classifyNetworkAssessment(&n)
+	if n.ShouldRepairWiFi {
+		t.Fatalf("missing adapter alias must not authorize Wi-Fi reset: %+v", n)
 	}
 }
