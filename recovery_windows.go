@@ -408,12 +408,9 @@ func (a *App) flushDNS() {
 func (a *App) renewDHCP(t RecoveryTarget) {
 	c := a.getConfig()
 	alias := t.InterfaceName
-	if alias == "" && t.InterfaceGUID != "" {
-		a.logger.warn("目标 WLAN 已知 GUID 但接口别名未知，为防止对其他网卡续租 DHCP，跳过此层。")
-		return
-	}
 	if alias == "" {
-		alias = detectWifiNetsh().InterfaceName
+		a.logger.warn("目标 Wi-Fi 接口别名未知，跳过 DHCP renew，避免影响其他网卡。")
+		return
 	}
 	if alias == "" {
 		a.logger.warn("无法确定 Wi-Fi 友好名称，跳过定向 DHCP renew，避免影响其他网卡。")
