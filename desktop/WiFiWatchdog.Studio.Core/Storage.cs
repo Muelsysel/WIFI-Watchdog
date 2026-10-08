@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -64,6 +65,26 @@ public sealed class ConfigStore
         }
     }
 
+    public string Fingerprint()
+    {
+        if (!File.Exists(FileName)) return "missing";
+        using var stream = new FileStream(FileName, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    // Best-effort optimistic concurrency guard. Prevents overwriting settings
+    // changed by the Go engine or another editor while the Studio form is open.
+    // Not a cross-process atomic compare-and-swap; avoid promising otherwise.
+    public string SaveIfUnchanged(JsonObject config, string expectedFingerprint)
+    {
+        Validate(config);
+        if (Fingerprint() != expectedFingerprint)
+            throw new ConfigConflictException("配置文件已被其他程序修改。请重新载入并核对设置后再保存。");
+        Save(config);
+        return Fingerprint();
+    }
+
     public void Save(JsonObject config)
     {
         Validate(config);
@@ -118,3 +139,5 @@ public sealed class PresetStore
     }
     public void Remove(string name) => File.Delete(FilePath(name));
 }
+
+public sealed class ConfigConflictException(string message) : IOException(message);
