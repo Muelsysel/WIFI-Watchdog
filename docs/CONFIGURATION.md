@@ -58,3 +58,9 @@ Runtime logs are stored as:
 `startWithWindows` mirrors the highest-privilege Task Scheduler entry managed by the control center.
 
 Do not hand-edit the file while the control center is saving settings. Writes use a temporary file plus Windows replace semantics to reduce corruption risk.
+
+## Recovery safety and disk bounds (v1.5 candidate)
+
+Saved WLAN profiles are reused only when the adapter identity matches. A connected interface with an unknown or mismatched SSID/Profile is not considered proof of successful recovery. If the physical Wi-Fi interface itself can connect to a public endpoint, automatic adapter reset is suppressed even if a system-level TUN/DNS/proxy probe fails.
+
+Each date has one `watchdog-YYYY-MM-DD.log`. At approximately 16 MiB it is compacted to preserve the latest ~8 MiB (best effort; a file held open by another Windows process may block replacement). The retention policy also removes old `hang-*.txt` and `crash-*.txt` diagnostic reports. These files may contain personal network identifiers; inspect them before sharing.
