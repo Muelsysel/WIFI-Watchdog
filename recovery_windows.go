@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-var appVersion = "1.6.0-rc.1"
+var appVersion = "1.6.1-rc.1"
 
 type RecoveryTarget struct {
 	ProfileName          string    `json:"profileName"`
@@ -782,7 +782,8 @@ func (a *App) generateDiagnosticReport() string {
 	appendCommandReport(&b, "arp -a", 15*time.Second, "arp.exe", "-a")
 	appendCommandReport(&b, "WinHTTP proxy", 15*time.Second, "netsh.exe", "winhttp", "show", "proxy")
 	b.WriteString("\r\n===== v1.5.1 Mihomo/TUN-aware assessment =====\r\n")
-	assessment := a.assessNetwork()
+	assessment := a.assessNetworkMode(true)
+	b.WriteString("HTTP test mode: COMPLETE, all four endpoints tested. LatencyMs is elapsed wall time per request.\r\n")
 	ab, _ := json.MarshalIndent(assessment, "", "  ")
 	b.WriteString(string(ab) + "\r\n")
 	_ = atomicWriteFile(path, []byte(b.String()), 0644)

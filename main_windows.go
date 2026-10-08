@@ -1053,8 +1053,8 @@ func (a *App) monitorLoop() {
 }
 
 func (a *App) manualCheck() {
-	a.setStatus(StateChecking, "正在立即检测系统网络 / VPN / Wi-Fi 底层...", false)
-	n := a.assessNetwork()
+	a.setStatus(StateChecking, "正在完整检测四个 HTTP 目标 / VPN / Wi-Fi 底层...", false)
+	n := a.assessNetworkMode(true)
 	if n.Online {
 		a.setStatus(StateOnline, "立即检测：系统互联网正常。", true)
 		return
@@ -1550,7 +1550,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	sc.refreshing = true
 	sc.mu.Unlock()
 	procEnableWindow.Call(sc.refreshButton, 0)
-	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
+	setControlText(sc.statusLine, "正在后台逐项检测四个 HTTP 目标与开机自启状态…")
 
 	a.goSafe("settings-refresh", func() {
 		defer func() {
@@ -1566,7 +1566,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 				a.reportRecoveredPanic("settings-refresh", recovered)
 			}
 		}()
-		assessment := a.assessNetwork()
+		assessment := a.assessNetworkMode(true)
 		startupEnabled, startupErr := startupTaskEnabled()
 		v, ok := settingsMap.Load(hwnd)
 		if !ok {
@@ -1658,9 +1658,9 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 		setCheck(sc.startup, startupEnabled)
 	}
 	if startupErr != "" {
-		setControlText(sc.statusLine, "状态刷新完成；开机自启查询超时/失败，不影响其他设置："+startupErr)
+		setControlText(sc.statusLine, "完整检测已完成；开机自启查询失败："+startupErr)
 	} else {
-		setControlText(sc.statusLine, "状态刷新完成。所有耗时操作均在后台线程执行。")
+		setControlText(sc.statusLine, fmt.Sprintf("完整HTTP检测：有效%d/%d，逐项状态码、耗时和错误详见当日日志或诊断报告。", n.System.ValidHTTP, n.System.HTTPAttempted))
 	}
 }
 

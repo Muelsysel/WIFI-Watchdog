@@ -5,7 +5,7 @@ Set-Location $Root
 
 New-Item -ItemType Directory -Force dist | Out-Null
 
-$Version = if ($env:WIFI_WATCHDOG_VERSION) { $env:WIFI_WATCHDOG_VERSION.TrimStart('v') } else { '1.6.0-rc.1' }
+$Version = if ($env:WIFI_WATCHDOG_VERSION) { $env:WIFI_WATCHDOG_VERSION.TrimStart('v') } else { '1.6.1-rc.1' }
 $LdFlags = "-H=windowsgui -s -w -X main.appVersion=$Version"
 
 gofmt -w *.go

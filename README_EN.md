@@ -4,7 +4,7 @@ Repository: `https://github.com/Muelsysel/WIFI-Watchdog`
 
 WiFi Watchdog is a lightweight Windows tray utility for detecting and recovering broken Wi‑Fi connectivity, with special care for campus Wi‑Fi, 802.1X, VPN/TUN, multiple adapters, and unattended operation.
 
-Candidate version: **v1.6.0-rc.1**
+Candidate version: **v1.6.1-rc.1**
 
 Key ideas:
 
@@ -57,3 +57,10 @@ The control center uses a lightweight native Win32/GDI dashboard with a dark sid
 The overview reports process working set and the current Go live heap separately. GDI fonts/brushes/pens are shared across window openings, and the window does not run animation or periodic repaint timers. The background runtime uses GC percentage 70 and a 96 MiB **soft Go heap target** unless `GOGC`/`GOMEMLIMIT` are set; this is not a hard Windows working-set cap.
 
 Verify layout, DPI scaling and idle/after-close memory behavior on actual Windows 11 hardware; automated build success is not a substitute.
+
+
+## v1.6.1: honest probe reporting
+
+The regular scheduled check launches four parallel requests and **stops after the first verified success**. Remaining targets are explicitly logged as **unverified**, not failed. For a complete four-endpoint report with HTTP status codes, latency and connection errors, use **Check Now**, **Refresh Network Status**, or **Generate Diagnostic Report**. Successful HTTP means the TCP fallback is unnecessary, not that its results were zero successes.
+
+Probe endpoints and their success validators are unchanged. System-Internet probes follow Windows routing, including TUN where active, but do not explicitly go through the mixed HTTP proxy.
