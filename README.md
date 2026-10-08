@@ -2,7 +2,7 @@
 
 一个面向 Windows 的轻量级 Wi‑Fi 自动检测与恢复工具，重点适配校园网、802.1X、VPN/TUN、多网卡和无人值守场景。
 
-> 当前测试版本：**v1.5.0-rc.1**（Win11 稳定性验证候选版）
+> 当前测试版本：**v1.5.1-rc.1**（Mihomo/TUN 联动诊断候选版）
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
@@ -216,3 +216,13 @@ MIT License。见 [LICENSE](LICENSE)。
 设置保存路径已移除同步日志写入。Win11 设置窗口仍需在真实机器上反复开关、编辑、保存验证，**GitHub CI 通过不代表随机卡死已彻底修复**。
 
 日志每天一个文件；当某天日志超过约 16 MiB 时，自动尽力保留最近约 8 MiB 的内容，避免异常高频日志把磁盘写满。所有诊断、挂起、崩溃报告共享保留天数策略。若卡死持续，请同时保留当天日志、`diagnostics/hang-*.txt`，以及 Windows 任务管理器创建的进程转储文件；公开提交前清理 SSID、IP、个人路径等敏感信息。
+
+## Clash Verge Rev / Mihomo TUN 联动诊断（v1.5.1-rc.1）
+
+适用于 Clash Verge Rev、TUN、Rule 模式。设置控制中心中的 **混合代理端口=2026**、**Mihomo 控制端口=9097**（实际使用其他端口请据实调整）。程序可用只读 Mihomo API 查询运行模式、TUN 状态、实际混合代理端口，并通过代理执行 TLS 校验的 HTTPS 探测。仅 CONNECT 成功并不算代理互联网可用。
+
+注意：部分 Clash Verge Rev 版本的 9097 地址可能未真正监听 TCP，而是经由内部命名管道工作。因此 **9097 连接失败不等于 VPN 停止**，软件将自动降级至 2026 混合代理检测、网卡状态、VPN 路由等证据。
+
+如已启用控制接口 Secret，可将其通过进程环境变量 `WIFI_WATCHDOG_MIHOMO_SECRET` 提供；**不要将密码写入 GitHub、日志或公开 issue**。没有正确 Secret 时仍可检测本地代理端口和保护 Wi-Fi。该功能只读、不重启 VPN、不切换节点。
+
+说明与示例见 [配置文档](docs/CONFIGURATION.md)。
