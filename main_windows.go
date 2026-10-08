@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -41,6 +42,7 @@ const (
 	WM_SETTINGS_SAVE_DONE    = WM_APP + 12
 	WM_SETTINGS_ACTIVATE     = WM_APP + 13
 	WM_SETTINGS_HEARTBEAT    = WM_APP + 14
+	WM_SETTINGS_SHUTDOWN     = WM_APP + 15
 
 	NIM_ADD    = 0x00000000
 	NIM_MODIFY = 0x00000001
@@ -329,6 +331,11 @@ func clamp(v, minV, maxV int) int {
 	return v
 }
 
+const (
+	maxDailyLogBytes = 16 * 1024 * 1024
+	keptLogTailBytes = 8 * 1024 * 1024
+)
+
 type Logger struct {
 	dir            string
 	mu             sync.Mutex
@@ -364,7 +371,6 @@ func (l *Logger) cleanupLocked(now time.Time) {
 	if l.lastCleanupDay == dayKey {
 		return
 	}
-	l.lastCleanupDay = dayKey
 	retention := l.retentionDays
 	if retention <= 0 {
 		retention = 30
@@ -373,6 +379,7 @@ func (l *Logger) cleanupLocked(now time.Time) {
 	if err != nil {
 		return
 	}
+	l.lastCleanupDay = dayKey
 	today, _ := time.ParseInLocation("2006-01-02", dayKey, now.Location())
 	cutoff := today.AddDate(0, 0, -(retention - 1))
 	for _, entry := range entries {
@@ -394,6 +401,26 @@ func (l *Logger) cleanupLocked(now time.Time) {
 	}
 }
 
+// compactLocked preserves the recent tail if a single busy day exceeds the
+// configured hard limit. We keep one file per calendar day and use an atomic
+// replace rather than leaving unbounded rotated copies on disk.
+func (l *Logger) compactLocked(path string) {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() < maxDailyLogBytes {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) <= keptLogTailBytes {
+		return
+	}
+	tail := data[len(data)-keptLogTailBytes:]
+	if idx := bytes.IndexByte(tail, '\n'); idx >= 0 {
+		tail = tail[idx+1:]
+	}
+	marker := []byte("--- early log entries compacted to bound daily disk usage ---\r\n")
+	_ = atomicWriteFile(path, append(marker, tail...), 0644)
+}
+
 func (l *Logger) write(level, text string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -404,6 +431,7 @@ func (l *Logger) write(level, text string) {
 	}
 	l.cleanupLocked(now)
 	path := l.currentPathLocked(now)
+	l.compactLocked(path)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
@@ -457,10 +485,12 @@ type App struct {
 	wakeCh   chan struct{}
 	onceStop sync.Once
 
-	repairMu     sync.Mutex
-	assessmentMu sync.Mutex
-	stateMu      sync.Mutex
-	workers      sync.WaitGroup
+	repairMu         sync.Mutex
+	assessmentMu     sync.Mutex
+	stateMu          sync.Mutex
+	workers          sync.WaitGroup
+	workerMu         sync.Mutex
+	lastAutoRepairAt atomic.Int64
 
 	settingsMu      sync.Mutex
 	settingsHwnd    uintptr
@@ -488,7 +518,9 @@ func (a *App) setConfig(c Config) {
 	a.cfg = normalized
 	a.cfgMu.Unlock()
 	if a.logger != nil {
-		a.logger.setRetentionDays(normalized.LogRetentionDays)
+		a.goSafe("log-retention-update", func() {
+			a.logger.setRetentionDays(normalized.LogRetentionDays)
+		})
 	}
 }
 
@@ -551,17 +583,20 @@ func (a *App) wake() {
 }
 
 func (a *App) stop() {
+	a.workerMu.Lock()
 	a.onceStop.Do(func() { close(a.stopCh) })
+	a.workerMu.Unlock()
 }
 
 func (a *App) reportRecoveredPanic(scope string, recovered any) {
 	stack := debug.Stack()
 	msg := fmt.Sprintf("%s panic: %v", scope, recovered)
 	if a.logger != nil {
-		a.logger.err(msg + "\r\n" + string(stack))
+		a.logger.err(msg + "；完整堆栈将写入独立的 crash 报告。")
 	}
 	dir := filepath.Join(a.dataDir, "diagnostics")
 	_ = os.MkdirAll(dir, 0755)
+	a.cleanupOldDiagnostics(time.Now())
 	path := filepath.Join(dir, "crash-"+time.Now().Format("20060102-150405")+".txt")
 	body := fmt.Sprintf("WiFi Watchdog crash report\r\nVersion: %s\r\nScope: %s\r\nTime: %s\r\nPanic: %v\r\n\r\n%s",
 		appVersion, scope, time.Now().Format(time.RFC3339), recovered, stack)
@@ -570,7 +605,17 @@ func (a *App) reportRecoveredPanic(scope string, recovered any) {
 }
 
 func (a *App) goSafe(scope string, fn func()) {
+	// Synchronize Add with stop/Wait: WaitGroup.Add at zero concurrently with
+	// Wait can panic, especially when the settings window closes during exit.
+	a.workerMu.Lock()
+	select {
+	case <-a.stopCh:
+		a.workerMu.Unlock()
+		return
+	default:
+	}
 	a.workers.Add(1)
+	a.workerMu.Unlock()
 	go func() {
 		defer a.workers.Done()
 		defer func() {
@@ -895,6 +940,14 @@ func (a *App) monitorLoop() {
 
 		// VPN/TUN protection: if the physical Wi-Fi has no strong fault evidence,
 		// never reset it merely because the VPN/system egress is broken.
+		if latest.UnderlayProtected {
+			a.setStatus(StateWaitingRetry,
+				fmt.Sprintf("物理 Wi-Fi 直连正常，更像代理/DNS/系统路由异常；%d 分钟后重检。", c.RepairRetryIntervalMinutes), true)
+			if !a.delayOrWake(time.Duration(c.RepairRetryIntervalMinutes) * time.Minute) {
+				return
+			}
+			continue
+		}
 		if latest.VPNProtected {
 			a.setStatus(StateVPNProtected,
 				fmt.Sprintf("检测到 VPN/TUN；Wi-Fi 底层未见强故障，跳过 Wi-Fi 恢复。%d 分钟后重检。", c.RepairRetryIntervalMinutes), true)
@@ -943,7 +996,7 @@ func (a *App) monitorLoop() {
 					a.setStatus(StateOnline, "恢复冷却期间网络已自行恢复。", true)
 					break
 				}
-				if latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
+				if latest.UnderlayProtected || latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
 					a.setStatus(StateVPNProtected, "冷却结束后重新评估：当前不适合自动操作 Wi-Fi。", true)
 					break
 				}
@@ -972,7 +1025,7 @@ func (a *App) monitorLoop() {
 				a.setStatus(StateOnline, "等待期间系统网络已自行恢复，无需再次操作 Wi-Fi。", true)
 				break
 			}
-			if latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
+			if latest.UnderlayProtected || latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
 				a.setStatus(StateVPNProtected, "当前更像 VPN/TUN/认证层问题，停止连续操作 Wi-Fi，返回保护监控。", true)
 				break
 			}
@@ -1318,9 +1371,7 @@ func (a *App) showSettings() {
 	a.settingsOpening = true
 	a.settingsMu.Unlock()
 
-	a.workers.Add(1)
-	go func() {
-		defer a.workers.Done()
+	a.goSafe("settings-ui", func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer func() {
@@ -1337,7 +1388,7 @@ func (a *App) showSettings() {
 			}
 		}()
 		a.runSettingsThread()
-	}()
+	})
 }
 
 func (a *App) runSettingsThread() {
@@ -1507,6 +1558,7 @@ func (a *App) watchSettingsResponsiveness(hwnd uintptr) {
 func (a *App) writeSettingsHangReport(now time.Time, hwnd uintptr) {
 	dir := filepath.Join(a.dataDir, "diagnostics")
 	_ = os.MkdirAll(dir, 0755)
+	a.cleanupOldDiagnostics(now)
 	path := filepath.Join(dir, "hang-"+now.Format("20060102-150405")+".txt")
 
 	buf := make([]byte, 2*1024*1024)
@@ -1545,9 +1597,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	procEnableWindow.Call(sc.refreshButton, 0)
 	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
 
-	a.workers.Add(1)
-	go func() {
-		defer a.workers.Done()
+	a.goSafe("settings-refresh", func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				if v, ok := settingsMap.Load(hwnd); ok {
@@ -1581,7 +1631,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 		sc.refreshing = false
 		sc.mu.Unlock()
 		procPostMessageW.Call(hwnd, WM_SETTINGS_REFRESH_DONE, 0, 0)
-	}()
+	})
 }
 
 func (a *App) applySettingsRefresh(hwnd uintptr) {
@@ -1721,9 +1771,7 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 	setControlText(sc.statusLine, "正在后台保存设置；窗口仍可响应，不会阻塞 UI…")
 
 	old := a.getConfig()
-	a.workers.Add(1)
-	go func() {
-		defer a.workers.Done()
+	a.goSafe("settings-save", func() {
 		var saveErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -1754,7 +1802,7 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 				_ = setStartupTask(old.StartWithWindows)
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) finishSettingsSave(hwnd uintptr) {
@@ -1776,7 +1824,9 @@ func (a *App) finishSettingsSave(hwnd uintptr) {
 		return
 	}
 	a.setConfig(c)
-	a.logger.info("设置已保存，监控循环将立即应用新参数。")
+	a.goSafe("settings-save-log", func() {
+		a.logger.info("设置已保存，监控循环将立即应用新参数。")
+	})
 	a.wake()
 	procEnableWindow.Call(sc.saveButton, 1)
 	procEnableWindow.Call(sc.cancelButton, 1)
@@ -1872,6 +1922,11 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			app.finishSettingsSave(hwnd)
 		}
 		return 0
+	case WM_SETTINGS_SHUTDOWN:
+		// The main application is exiting: destroy this UI even when a settings
+		// save is in progress. Workers finish independently during graceful exit.
+		procDestroyWindow.Call(hwnd)
+		return 0
 	case WM_SETTINGS_ACTIVATE:
 		procShowWindow.Call(hwnd, SW_SHOW)
 		procSetForegroundWindow.Call(hwnd)
@@ -1940,7 +1995,7 @@ func mainWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			settingsHwnd := app.settingsHwnd
 			app.settingsMu.Unlock()
 			if settingsHwnd != 0 {
-				procPostMessageW.Call(settingsHwnd, WM_CLOSE, 0, 0)
+				procPostMessageW.Call(settingsHwnd, WM_SETTINGS_SHUTDOWN, 0, 0)
 			}
 			app.stop()
 			app.removeTrayIcon()
@@ -2164,7 +2219,7 @@ func main() {
 	select {
 	case <-done:
 		logger.info("后台任务已安全结束。")
-	case <-time.After(15 * time.Second):
-		logger.warn("退出等待后台任务超过 15 秒，程序将结束。")
+	case <-time.After(150 * time.Second):
+		logger.warn("退出等待后台任务超过 150 秒，仍有任务在执行；请检查网卡启用状态。")
 	}
 }

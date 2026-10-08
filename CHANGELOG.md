@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.5.0-rc.1 — Windows 11 hardening candidate
+
+- Fail closed when SSID/Profile is hidden or mismatched. A matching adapter GUID alone is no longer treated as the same Wi-Fi network.
+- Require an explicitly verified target association instead of accepting any Wi-Fi connection.
+- Never borrow a saved profile from a different WLAN interface after the current adapter disconnects.
+- Reassess the live Wi-Fi/VPN status before the invasive adapter reset; abort if the network or protection conditions change.
+- Treat a successful interface-bound Wi-Fi Internet probe as strong evidence to protect the physical adapter even without detected VPN software.
+- Coordinate background worker creation with shutdown to prevent Go WaitGroup Add/Wait races.
+- Force-close the separate settings UI queue on application exit without a blocking save-in-progress modal prompt.
+- Remove remaining synchronous logger calls from the settings-save UI path.
+- Extend best-effort graceful shutdown to 150 seconds for in-flight adapter/service recovery.
+- Keep one daily log, compacting it after 16 MiB to approximately the newest 8 MiB.
+- Apply diagnostic retention to hang and crash reports as well as manual diagnostic exports.
+- Add targeted regression tests for unsafe association matching, cross-adapter recovery, healthy Wi-Fi underlay and log/diagnostic retention.
+
+**Validation note:** automated Windows CI cannot prove the sporadic Windows 11 settings-window freeze has been eliminated. This candidate needs a real Windows 11 reproduction test.
+
 ## v1.4.1
 
 ### Windows 11 settings hang isolation

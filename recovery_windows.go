@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-var appVersion = "1.4.1"
+var appVersion = "1.5.0-rc.1"
 
 type RecoveryTarget struct {
 	ProfileName          string    `json:"profileName"`
@@ -175,15 +175,31 @@ func (a *App) recordInternetOK() {
 }
 
 func (a *App) recordAutoRepairAttempt() {
-	_ = a.updatePersistentState(func(st *PersistentState) { st.LastAutoRepairAt = time.Now() })
+	now := time.Now()
+	a.lastAutoRepairAt.Store(now.UnixNano())
+	if err := a.updatePersistentState(func(st *PersistentState) { st.LastAutoRepairAt = now }); err != nil {
+		a.logger.warn("恢复冷却状态写盘失败；本次进程仍将遵守内存冷却：" + err.Error())
+	}
 }
 
 func (a *App) remainingAutoRepairCooldown(interval time.Duration) time.Duration {
 	st := a.loadPersistentState()
-	if st.LastAutoRepairAt.IsZero() {
+	last := st.LastAutoRepairAt
+	if unixNano := a.lastAutoRepairAt.Load(); unixNano > 0 {
+		inMemory := time.Unix(0, unixNano)
+		if inMemory.After(last) {
+			last = inMemory
+		}
+	}
+	if last.IsZero() {
 		return 0
 	}
-	remaining := interval - time.Since(st.LastAutoRepairAt)
+	elapsed := time.Since(last)
+	if elapsed < 0 {
+		// Clock corrections must not cause multi-day cooldowns.
+		elapsed = 0
+	}
+	remaining := interval - elapsed
 	if remaining < 0 {
 		return 0
 	}
@@ -205,9 +221,8 @@ func sameNetworkIdentity(current wifiInfo, remembered RecoveryTarget) bool {
 	if current.SSID != "" && remembered.SSID != "" {
 		return current.SSID == remembered.SSID
 	}
-	if current.InterfaceGUID != "" && remembered.InterfaceGUID != "" {
-		return strings.EqualFold(strings.Trim(current.InterfaceGUID, "{}"), strings.Trim(remembered.InterfaceGUID, "{}"))
-	}
+	// The same physical adapter may roam to a different network. GUID equality
+	// alone is not proof of the SSID/Profile: never borrow a stale saved profile.
 	return false
 }
 
@@ -215,9 +230,13 @@ func (a *App) resolveTarget(current wifiInfo) RecoveryTarget {
 	remembered := a.loadRememberedTarget()
 	base := targetFromInfo(current)
 	if !current.Connected {
-		// If disconnected, keep current interface identity but use the last known
-		// successful Profile/SSID. This is the key fallback when auto-connect fails.
-		return mergeTarget(base, remembered)
+		// Use a remembered profile only on the same adapter. A missing/changed
+		// GUID is ambiguous: never switch a different WLAN interface by accident.
+		if current.InterfaceGUID != "" && remembered.InterfaceGUID != "" &&
+			strings.EqualFold(strings.Trim(current.InterfaceGUID, "{}"), strings.Trim(remembered.InterfaceGUID, "{}")) {
+			return mergeTarget(base, remembered)
+		}
+		return base
 	}
 
 	// When connected to a different network, never borrow the old Profile just
@@ -239,7 +258,8 @@ func targetMatches(i wifiInfo, t RecoveryTarget) bool {
 	if t.SSID != "" && i.SSID != "" {
 		return i.SSID == t.SSID
 	}
-	return i.Connected
+	// Do not treat association to an arbitrary AP as confirmation of the target.
+	return false
 }
 
 func (a *App) waitForAssociation(t RecoveryTarget, timeout time.Duration) bool {
@@ -389,7 +409,8 @@ func (a *App) renewDHCP(t RecoveryTarget) {
 	c := a.getConfig()
 	alias := t.InterfaceName
 	if alias == "" {
-		alias = detectWifiNetsh().InterfaceName
+		a.logger.warn("目标 Wi-Fi 接口别名未知，跳过 DHCP renew，避免影响其他网卡。")
+		return
 	}
 	if alias == "" {
 		a.logger.warn("无法确定 Wi-Fi 友好名称，跳过定向 DHCP renew，避免影响其他网卡。")
@@ -465,7 +486,10 @@ func (a *App) setAdapterEnabledPowerShell(t RecoveryTarget, enabled bool) error 
 	if len(clauses) == 0 {
 		return fmt.Errorf("no adapter identity available")
 	}
-	selector := strings.Join(clauses, " -or ")
+	// If a stable interface GUID is known, never allow a stale alias or
+	// description to select a different adapter (especially dangerous on disable).
+	// For legacy saved targets without GUID, prefer description over alias.
+	selector := clauses[0]
 	script := "$ErrorActionPreference='Stop'; $a=Get-NetAdapter | Where-Object { " + selector + " } | Select-Object -First 1; if(-not $a){throw 'Wi-Fi adapter not found'}; " + action
 	out, err := powershellEncoded(script, 30*time.Second)
 	if err != nil {
@@ -474,21 +498,34 @@ func (a *App) setAdapterEnabledPowerShell(t RecoveryTarget, enabled bool) error 
 	return nil
 }
 
+func (a *App) setAdapterEnabledSafe(t RecoveryTarget, enabled bool) error {
+	if t.InterfaceGUID != "" {
+		// When the stable GUID is known, do not try a possibly stale alias first.
+		// A stale alias can refer to another physical adapter after driver changes.
+		return a.setAdapterEnabledPowerShell(t, enabled)
+	}
+	if t.InterfaceName == "" {
+		return fmt.Errorf("no verified adapter alias or GUID")
+	}
+	err := a.setAdapterEnabledNetsh(t.InterfaceName, enabled)
+	if err == nil {
+		return nil
+	}
+	a.logger.warn("netsh 无法修改网卡，按目标别名尝试 PowerShell：" + err.Error())
+	return a.setAdapterEnabledPowerShell(t, enabled)
+}
+
 func (a *App) restartAdapter(t RecoveryTarget) bool {
 	c := a.getConfig()
-	alias := t.InterfaceName
-	if alias == "" {
-		alias = detectWifiNetsh().InterfaceName
+	if t.InterfaceName == "" && t.InterfaceGUID == "" {
+		a.logger.warn("缺少目标网卡 GUID 与接口名称，禁止自动禁用未知网卡。")
+		return false
 	}
 
 	a.logger.warn("兜底层：准备重启 Wi-Fi 网卡。")
-	err := a.setAdapterEnabledNetsh(alias, false)
-	if err != nil {
-		a.logger.warn("netsh 关闭网卡失败，尝试 PowerShell 兜底：" + err.Error())
-		if err = a.setAdapterEnabledPowerShell(t, false); err != nil {
-			a.logger.err("关闭 Wi-Fi 网卡失败：" + err.Error())
-			return false
-		}
+	if err := a.setAdapterEnabledSafe(t, false); err != nil {
+		a.logger.err("关闭 Wi-Fi 网卡失败：" + err.Error())
+		return false
 	}
 
 	// Once disabled, re-enable is a critical cleanup action. An application exit
@@ -500,13 +537,9 @@ func (a *App) restartAdapter(t RecoveryTarget) bool {
 	case <-time.After(time.Duration(c.WifiDisableWaitSeconds) * time.Second):
 	}
 
-	err = a.setAdapterEnabledNetsh(alias, true)
-	if err != nil {
-		a.logger.warn("netsh 开启网卡失败，尝试 PowerShell 兜底：" + err.Error())
-		if err = a.setAdapterEnabledPowerShell(t, true); err != nil {
-			a.logger.err("重新开启 Wi-Fi 网卡失败：" + err.Error())
-			return false
-		}
+	if err := a.setAdapterEnabledSafe(t, true); err != nil {
+		a.logger.err("重新开启 Wi-Fi 网卡失败：" + err.Error())
+		return false
 	}
 
 	a.logger.info("Wi-Fi 网卡已重新启用，等待驱动初始化。")
@@ -553,6 +586,10 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 
 	current := detectWifi()
 	t = mergeTarget(t, a.resolveTarget(current))
+	if current.Connected && (t.ProfileName != "" || t.SSID != "") && !targetMatches(current, t) {
+		a.logger.warn("恢复目标与当前已连接网络不匹配，停止自动切换，避免打断新的 Wi-Fi 连接。")
+		return false
+	}
 	if t.ProfileName == "" && t.SSID == "" {
 		a.logger.err("没有可用的历史 Wi-Fi Profile/SSID，无法主动恢复。请先正常连接一次目标 Wi-Fi。")
 		return false
@@ -584,6 +621,20 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 	if a.hasInternet() {
 		a.logger.info("进入网卡重启前检测到互联网已自行恢复，取消网卡重启。")
 		return true
+	}
+	// Re-evaluate protection after soft reconnect: VPN routes, gateway
+	// reachability and the selected WLAN may have changed during recovery.
+	beforeRestart := a.assessNetwork()
+	if beforeRestart.Online {
+		return true
+	}
+	if !beforeRestart.ShouldRepairWiFi {
+		a.logger.warn("重启网卡前重新评估发现保护条件，跳过侵入式恢复：" + beforeRestart.Reason)
+		return false
+	}
+	if beforeRestart.WiFi.Connected && !targetMatches(beforeRestart.WiFi, t) {
+		a.logger.warn("网卡重启前发现已切换到其他无线网络，停止恢复。")
+		return false
 	}
 	a.logger.warn("恢复层 3：重启无线网卡，然后强制连接保存的 WLAN Profile。")
 	if a.restartAdapter(t) {
@@ -690,9 +741,10 @@ func (a *App) cleanupOldDiagnostics(now time.Time) {
 	if retention <= 0 {
 		retention = 30
 	}
-	cutoff := now.AddDate(0, 0, -retention)
+	cutoff := now.AddDate(0, 0, -(retention - 1))
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "diagnostics-") || !strings.HasSuffix(entry.Name(), ".txt") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") ||
+			(!strings.HasPrefix(entry.Name(), "diagnostics-") && !strings.HasPrefix(entry.Name(), "crash-") && !strings.HasPrefix(entry.Name(), "hang-")) {
 			continue
 		}
 		info, err := entry.Info()

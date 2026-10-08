@@ -64,16 +64,17 @@ type WiFiUnderlayStatus struct {
 }
 
 type NetworkAssessment struct {
-	WiFi             wifiInfo
-	System           SystemProbeResult
-	VPN              VPNStatus
-	DeepChecked      bool
-	Underlay         WiFiUnderlayStatus
-	Online           bool
-	ShouldRepairWiFi bool
-	VPNProtected     bool
-	CaptiveProtected bool
-	Reason           string
+	WiFi              wifiInfo
+	System            SystemProbeResult
+	VPN               VPNStatus
+	DeepChecked       bool
+	Underlay          WiFiUnderlayStatus
+	Online            bool
+	ShouldRepairWiFi  bool
+	VPNProtected      bool
+	CaptiveProtected  bool
+	UnderlayProtected bool
+	Reason            string
 }
 
 func newSystemHTTPClient(timeout time.Duration) *http.Client {
@@ -554,6 +555,12 @@ func (a *App) assessWiFiUnderlay(wifi wifiInfo) WiFiUnderlayStatus {
 		u.Reason = "Wi-Fi 未关联"
 		return u
 	}
+	if strings.TrimSpace(wifi.InterfaceName) == "" {
+		// Windows 11 privacy restrictions or WLAN API issues can hide the
+		// interface alias. Missing metadata is not evidence of link failure.
+		u.Reason = "无线网卡已关联但接口别名未知，无法可靠检查物理网络"
+		return u
+	}
 	ip, found := wifiIPv4ByAlias(wifi.InterfaceName)
 	if !found || ip == nil {
 		u.StrongFault = true
@@ -599,8 +606,24 @@ func classifyNetworkAssessment(n *NetworkAssessment) {
 		return
 	}
 	if !n.WiFi.Connected {
+		if n.WiFi.InterfaceGUID == "" && n.WiFi.InterfaceName == "" {
+			n.Reason = "无法识别物理 Wi-Fi 接口，避免误操作其他网卡"
+			return
+		}
 		n.ShouldRepairWiFi = true
 		n.Reason = "系统无网且 Wi-Fi 未关联"
+		return
+	}
+	if strings.TrimSpace(n.WiFi.InterfaceName) == "" {
+		n.Reason = "Wi-Fi 已关联但物理接口别名不可确认，暂停自动断开/重启"
+		return
+	}
+	if n.Underlay.DirectProbeOK {
+		// A successful probe explicitly bound to the physical Wi-Fi adapter
+		// proves the underlay still has internet. A VPN, DNS or system-route
+		// failure must not trigger a disruptive Wi-Fi reconnect.
+		n.UnderlayProtected = true
+		n.Reason = "系统探测异常，但绑定物理 Wi-Fi 的直连探测成功；保护无线连接"
 		return
 	}
 	if n.System.CaptiveSuspected && !n.Underlay.StrongFault {

@@ -2,7 +2,7 @@
 
 一个面向 Windows 的轻量级 Wi‑Fi 自动检测与恢复工具，重点适配校园网、802.1X、VPN/TUN、多网卡和无人值守场景。
 
-> 当前版本：**v1.4.1**
+> 当前测试版本：**v1.5.0-rc.1**（Win11 稳定性验证候选版）
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
@@ -208,3 +208,11 @@ go build -trimpath -ldflags "-H=windowsgui -s -w" -o WiFiWatchdog.exe .
 ## License
 
 MIT License。见 [LICENSE](LICENSE)。
+
+## v1.5.0-rc.1 的稳定性验证重点
+
+这轮优先降低误重连风险：仅在确认 WLAN Profile/SSID 身份时判断重连成功；没有足够身份信息时宁可跳过自动恢复，不去断开其他 Wi-Fi。系统网络探测失败但物理 Wi-Fi 绑定探测成功时，也不执行网卡重启。
+
+设置保存路径已移除同步日志写入。Win11 设置窗口仍需在真实机器上反复开关、编辑、保存验证，**GitHub CI 通过不代表随机卡死已彻底修复**。
+
+日志每天一个文件；当某天日志超过约 16 MiB 时，自动尽力保留最近约 8 MiB 的内容，避免异常高频日志把磁盘写满。所有诊断、挂起、崩溃报告共享保留天数策略。若卡死持续，请同时保留当天日志、`diagnostics/hang-*.txt`，以及 Windows 任务管理器创建的进程转储文件；公开提交前清理 SSID、IP、个人路径等敏感信息。

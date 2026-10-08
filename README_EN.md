@@ -4,7 +4,7 @@ Repository: `https://github.com/Muelsysel/WIFI-Watchdog`
 
 WiFi Watchdog is a lightweight Windows tray utility for detecting and recovering broken Wi‑Fi connectivity, with special care for campus Wi‑Fi, 802.1X, VPN/TUN, multiple adapters, and unattended operation.
 
-Version: **v1.4.1**
+Candidate version: **v1.5.0-rc.1**
 
 Key ideas:
 
@@ -36,3 +36,9 @@ No telemetry, no cloud upload, and no Wi‑Fi/802.1X credential collection. Dail
 ## License
 
 MIT.
+
+## Windows 11 hardening candidate
+
+This release candidate favors safe recovery over disruptive false positives. A WLAN profile/SSID mismatch or ambiguous adapter identity stops automated reconnect. Physical Wi-Fi reachability protects the interface even when the system-level probe fails. Settings save no longer performs synchronous disk logging.
+
+Daily logs are compacted above 16 MiB, keeping the newest ~8 MiB. Hang and crash diagnostics also follow retention rules. CI success does not prove that sporadic Windows 11 UI hangs are resolved; reproduction testing on actual hardware remains necessary.
