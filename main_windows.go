@@ -485,11 +485,11 @@ type App struct {
 	wakeCh   chan struct{}
 	onceStop sync.Once
 
-	repairMu     sync.Mutex
-	assessmentMu sync.Mutex
-	stateMu      sync.Mutex
-	workers      sync.WaitGroup
-	workerMu     sync.Mutex
+	repairMu         sync.Mutex
+	assessmentMu     sync.Mutex
+	stateMu          sync.Mutex
+	workers          sync.WaitGroup
+	workerMu         sync.Mutex
 	lastAutoRepairAt atomic.Int64
 
 	settingsMu      sync.Mutex

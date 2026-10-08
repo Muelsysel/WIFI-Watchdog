@@ -178,7 +178,7 @@ func (a *App) recordAutoRepairAttempt() {
 	now := time.Now()
 	a.lastAutoRepairAt.Store(now.UnixNano())
 	if err := a.updatePersistentState(func(st *PersistentState) { st.LastAutoRepairAt = now }); err != nil {
-		a.logger.warn("恢复冷却状态写盘失败；本次进程仍将遵守内存冷却："+err.Error())
+		a.logger.warn("恢复冷却状态写盘失败；本次进程仍将遵守内存冷却：" + err.Error())
 	}
 }
 
