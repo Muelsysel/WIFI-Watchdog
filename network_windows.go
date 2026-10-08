@@ -44,8 +44,11 @@ type SystemProbeResult struct {
 type VPNStatus struct {
 	Detected        bool
 	LocalPortOpen   bool
-	ProxyUpstreamOK bool
+	ProxyUpstreamOK bool // Validated public HTTPS over the mixed proxy
+	ProxyTunnelOK   bool // CONNECT/SOCKS handshake (weaker evidence)
 	ProxyProtocol   string
+	EffectivePort   int
+	Mihomo          MihomoStatus
 	AdapterHints    []string
 	RouteHints      []string
 	Signals         []string
@@ -427,20 +430,46 @@ func (a *App) detectVPNStatus(wifi wifiInfo) VPNStatus {
 		return VPNStatus{}
 	}
 	v := VPNStatus{}
-	if c.VPNLocalPort > 0 {
-		p := probeLocalProxy(c.VPNLocalPort, 1200*time.Millisecond)
+	// 9097 can be configured in Clash Verge Rev but left unbound. An
+	// unreachable TCP controller does NOT prove the core has stopped.
+	v.Mihomo = probeConfiguredMihomo(c.MihomoControllerPort, 1200*time.Millisecond)
+	if v.Mihomo.Available {
+		v.Signals = append(v.Signals, "Mihomo controller present")
+	}
+	if v.Mihomo.Authenticated {
+		desc := "Mihomo API authenticated"
+		if v.Mihomo.Mode != "" {
+			desc += " mode=" + v.Mihomo.Mode
+		}
+		if v.Mihomo.TunKnown {
+			desc += fmt.Sprintf(" tun=%t", v.Mihomo.TunEnabled)
+		}
+		v.Signals = append(v.Signals, desc)
+	}
+	// The user's manual mixed-port setting wins. Otherwise, a confirmed
+	// /configs response supplies the *actual* mixed port, e.g. 2026.
+	port := c.VPNLocalPort
+	if port == 0 {
+		port = v.Mihomo.MixedPort
+	}
+	v.EffectivePort = port
+	if port > 0 {
+		p := probeLocalProxy(port, 1200*time.Millisecond)
 		if p.Listening {
 			v.LocalPortOpen = true
 			v.ProxyProtocol = p.Protocol
-			v.ProxyUpstreamOK = p.Upstream
-			msg := fmt.Sprintf("localhost:%d listening", c.VPNLocalPort)
+			v.ProxyTunnelOK = p.Upstream
 			if p.Protocol != "" {
-				msg += " protocol=" + p.Protocol
+				v.Signals = append(v.Signals, fmt.Sprintf("mixed-proxy localhost:%d protocol=%s tunnel=%t", port, p.Protocol, p.Upstream))
+				// TLS-validated HTTPS is stronger evidence than a successful
+				// CONNECT handshake, which may precede upstream failures.
+				if p.Upstream {
+					v.ProxyUpstreamOK = probeValidatedMixedProxy(port, 2500*time.Millisecond)
+					if v.ProxyUpstreamOK {
+						v.Signals = append(v.Signals, "mixed-proxy HTTPS validated")
+					}
+				}
 			}
-			if p.Upstream {
-				msg += " upstream=OK"
-			}
-			v.Signals = append(v.Signals, msg)
 		}
 	}
 	v.AdapterHints = vpnAdapterHints(wifi.InterfaceName)
@@ -618,6 +647,13 @@ func classifyNetworkAssessment(n *NetworkAssessment) {
 		n.Reason = "Wi-Fi 已关联但物理接口别名不可确认，暂停自动断开/重启"
 		return
 	}
+	if n.VPN.ProxyUpstreamOK {
+		// HTTPS through Mihomo works; system TUN/routing/DNS checks are the
+		// failing layer. Restarting the physical Wi-Fi is counterproductive.
+		n.VPNProtected = true
+		n.Reason = "Mihomo 混合代理 HTTPS 可用，但系统互联网探测失败；优先排查 TUN 路由/DNS，禁止重启 Wi-Fi"
+		return
+	}
 	if n.Underlay.DirectProbeOK {
 		// A successful probe explicitly bound to the physical Wi-Fi adapter
 		// proves the underlay still has internet. A VPN, DNS or system-route
@@ -631,6 +667,11 @@ func classifyNetworkAssessment(n *NetworkAssessment) {
 		n.Reason = "疑似认证门户/受限网络，避免自动重启 Wi-Fi"
 		return
 	}
+	if n.VPN.Mihomo.Available && n.VPN.Mihomo.Unauthorized && !n.Underlay.StrongFault {
+		n.VPNProtected = true
+		n.Reason = "Mihomo 控制接口可达但鉴权失败；VPN 状态尚不能确认，保护 Wi-Fi"
+		return
+	}
 	if n.VPN.Detected && !n.Underlay.StrongFault {
 		n.VPNProtected = true
 		if n.VPN.ProxyUpstreamOK {
@@ -639,6 +680,16 @@ func classifyNetworkAssessment(n *NetworkAssessment) {
 			n.Reason = "系统互联网异常，但检测到 VPN/TUN 且 Wi-Fi 底层未发现强故障证据"
 		}
 		return
+	}
+	if n.VPN.Detected && n.Underlay.StrongFault && n.WiFi.Connected && n.WiFi.InterfaceName != "" {
+		// A failed ICMP/ARP/bound TCP probe is not strong proof of broken Wi-Fi
+		// when TUN and campus AP policies may block all three. Require a
+		// structural failure such as no Wi-Fi IPv4 before invasive recovery.
+		if n.Underlay.IPv4 != nil {
+			n.VPNProtected = true
+			n.Reason = "Mihomo/TUN 环境下 Wi-Fi 已关联且有 IPv4；深度探测失败可能受路由/防火墙影响，暂不重启网卡"
+			return
+		}
 	}
 	if n.VPN.Detected && n.Underlay.StrongFault {
 		n.ShouldRepairWiFi = true
