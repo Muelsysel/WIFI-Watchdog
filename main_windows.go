@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -329,6 +330,11 @@ func clamp(v, minV, maxV int) int {
 	return v
 }
 
+const (
+	maxDailyLogBytes = 16 * 1024 * 1024
+	keptLogTailBytes = 8 * 1024 * 1024
+)
+
 type Logger struct {
 	dir            string
 	mu             sync.Mutex
@@ -364,7 +370,6 @@ func (l *Logger) cleanupLocked(now time.Time) {
 	if l.lastCleanupDay == dayKey {
 		return
 	}
-	l.lastCleanupDay = dayKey
 	retention := l.retentionDays
 	if retention <= 0 {
 		retention = 30
@@ -373,6 +378,7 @@ func (l *Logger) cleanupLocked(now time.Time) {
 	if err != nil {
 		return
 	}
+	l.lastCleanupDay = dayKey
 	today, _ := time.ParseInLocation("2006-01-02", dayKey, now.Location())
 	cutoff := today.AddDate(0, 0, -(retention - 1))
 	for _, entry := range entries {
@@ -394,6 +400,26 @@ func (l *Logger) cleanupLocked(now time.Time) {
 	}
 }
 
+// compactLocked preserves the recent tail if a single busy day exceeds the
+// configured hard limit. We keep one file per calendar day and use an atomic
+// replace rather than leaving unbounded rotated copies on disk.
+func (l *Logger) compactLocked(path string) {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() < maxDailyLogBytes {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) <= keptLogTailBytes {
+		return
+	}
+	tail := data[len(data)-keptLogTailBytes:]
+	if idx := bytes.IndexByte(tail, '\n'); idx >= 0 {
+		tail = tail[idx+1:]
+	}
+	marker := []byte("--- early log entries compacted to bound daily disk usage ---\r\n")
+	_ = atomicWriteFile(path, append(marker, tail...), 0644)
+}
+
 func (l *Logger) write(level, text string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -404,6 +430,7 @@ func (l *Logger) write(level, text string) {
 	}
 	l.cleanupLocked(now)
 	path := l.currentPathLocked(now)
+	l.compactLocked(path)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
@@ -565,6 +592,7 @@ func (a *App) reportRecoveredPanic(scope string, recovered any) {
 	}
 	dir := filepath.Join(a.dataDir, "diagnostics")
 	_ = os.MkdirAll(dir, 0755)
+	a.cleanupOldDiagnostics(time.Now())
 	path := filepath.Join(dir, "crash-"+time.Now().Format("20060102-150405")+".txt")
 	body := fmt.Sprintf("WiFi Watchdog crash report\r\nVersion: %s\r\nScope: %s\r\nTime: %s\r\nPanic: %v\r\n\r\n%s",
 		appVersion, scope, time.Now().Format(time.RFC3339), recovered, stack)
@@ -1526,6 +1554,7 @@ func (a *App) watchSettingsResponsiveness(hwnd uintptr) {
 func (a *App) writeSettingsHangReport(now time.Time, hwnd uintptr) {
 	dir := filepath.Join(a.dataDir, "diagnostics")
 	_ = os.MkdirAll(dir, 0755)
+	a.cleanupOldDiagnostics(now)
 	path := filepath.Join(dir, "hang-"+now.Format("20060102-150405")+".txt")
 
 	buf := make([]byte, 2*1024*1024)
