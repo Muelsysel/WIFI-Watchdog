@@ -108,7 +108,7 @@ func TestClassifyVPNProtectsHealthyWiFi(t *testing.T) {
 func TestClassifyRepairsDisconnectedWiFiEvenWithVPN(t *testing.T) {
 	n := NetworkAssessment{
 		System: SystemProbeResult{Online: false},
-		WiFi:   wifiInfo{Connected: false},
+		WiFi:   wifiInfo{Connected: false, InterfaceGUID: "{ABC}"},
 		VPN:    VPNStatus{Detected: true},
 	}
 	classifyNetworkAssessment(&n)
