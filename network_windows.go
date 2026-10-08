@@ -73,6 +73,7 @@ type NetworkAssessment struct {
 	ShouldRepairWiFi bool
 	VPNProtected     bool
 	CaptiveProtected bool
+	UnderlayProtected bool
 	Reason           string
 }
 
@@ -599,8 +600,20 @@ func classifyNetworkAssessment(n *NetworkAssessment) {
 		return
 	}
 	if !n.WiFi.Connected {
+		if n.WiFi.InterfaceGUID == "" && n.WiFi.InterfaceName == "" {
+			n.Reason = "无法识别物理 Wi-Fi 接口，避免误操作其他网卡"
+			return
+		}
 		n.ShouldRepairWiFi = true
 		n.Reason = "系统无网且 Wi-Fi 未关联"
+		return
+	}
+	if n.Underlay.DirectProbeOK {
+		// A successful probe explicitly bound to the physical Wi-Fi adapter
+		// proves the underlay still has internet. A VPN, DNS or system-route
+		// failure must not trigger a disruptive Wi-Fi reconnect.
+		n.UnderlayProtected = true
+		n.Reason = "系统探测异常，但绑定物理 Wi-Fi 的直连探测成功；保护无线连接"
 		return
 	}
 	if n.System.CaptiveSuspected && !n.Underlay.StrongFault {
