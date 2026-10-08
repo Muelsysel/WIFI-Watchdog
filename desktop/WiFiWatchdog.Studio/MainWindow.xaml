@@ -12,7 +12,7 @@
                         <TextBlock Text="W" FontSize="25" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <TextBlock Text="WiFi Watchdog" Foreground="White" FontSize="19" FontWeight="Bold" Margin="0,14,0,1"/>
-                    <TextBlock Text="STUDIO · PREVIEW" Foreground="#8FA8CF" FontSize="11" FontWeight="SemiBold" CharacterSpacing="1"/>
+                    <TextBlock Text="STUDIO · PREVIEW" Foreground="#8FA8CF" FontSize="11" FontWeight="SemiBold"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Bottom" Margin="22,16,16,28">
                     <Border Background="#22324C" CornerRadius="12" Padding="13">
