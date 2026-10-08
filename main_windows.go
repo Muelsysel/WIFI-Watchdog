@@ -42,6 +42,7 @@ const (
 	WM_SETTINGS_SAVE_DONE    = WM_APP + 12
 	WM_SETTINGS_ACTIVATE     = WM_APP + 13
 	WM_SETTINGS_HEARTBEAT    = WM_APP + 14
+	WM_SETTINGS_SHUTDOWN     = WM_APP + 15
 
 	NIM_ADD    = 0x00000000
 	NIM_MODIFY = 0x00000001
@@ -1916,6 +1917,11 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			app.finishSettingsSave(hwnd)
 		}
 		return 0
+	case WM_SETTINGS_SHUTDOWN:
+		// The main application is exiting: destroy this UI even when a settings
+		// save is in progress. Workers finish independently during graceful exit.
+		procDestroyWindow.Call(hwnd)
+		return 0
 	case WM_SETTINGS_ACTIVATE:
 		procShowWindow.Call(hwnd, SW_SHOW)
 		procSetForegroundWindow.Call(hwnd)
@@ -1984,7 +1990,7 @@ func mainWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			settingsHwnd := app.settingsHwnd
 			app.settingsMu.Unlock()
 			if settingsHwnd != 0 {
-				procPostMessageW.Call(settingsHwnd, WM_CLOSE, 0, 0)
+				procPostMessageW.Call(settingsHwnd, WM_SETTINGS_SHUTDOWN, 0, 0)
 			}
 			app.stop()
 			app.removeTrayIcon()
