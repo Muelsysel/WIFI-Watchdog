@@ -517,7 +517,9 @@ func (a *App) setConfig(c Config) {
 	a.cfg = normalized
 	a.cfgMu.Unlock()
 	if a.logger != nil {
-		a.logger.setRetentionDays(normalized.LogRetentionDays)
+		a.goSafe("log-retention-update", func() {
+			a.logger.setRetentionDays(normalized.LogRetentionDays)
+		})
 	}
 }
 
@@ -1821,7 +1823,9 @@ func (a *App) finishSettingsSave(hwnd uintptr) {
 		return
 	}
 	a.setConfig(c)
-	a.logger.info("设置已保存，监控循环将立即应用新参数。")
+	a.goSafe("settings-save-log", func() {
+		a.logger.info("设置已保存，监控循环将立即应用新参数。")
+	})
 	a.wake()
 	procEnableWindow.Call(sc.saveButton, 1)
 	procEnableWindow.Call(sc.cancelButton, 1)
