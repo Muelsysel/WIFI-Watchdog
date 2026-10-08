@@ -1,0 +1,57 @@
+name: Studio Windows CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/studio-ci.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/studio-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-studio:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify Studio core (without UI)
+        run: dotnet run -c Release --project desktop/WiFiWatchdog.Studio.Tests/WiFiWatchdog.Studio.Tests.csproj
+
+      - name: Compile native Windows desktop UI
+        run: dotnet build desktop/WiFiWatchdog.Studio/WiFiWatchdog.Studio.csproj -c Release
+        # restore is performed explicitly below in future release jobs
+
+      - name: Publish self-contained x64 Studio
+        shell: pwsh
+        run: |
+          dotnet publish desktop/WiFiWatchdog.Studio/WiFiWatchdog.Studio.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=false -o dist/Studio
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist/Studio/Engine | Out-Null
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:CGO_ENABLED = '0'
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist/Studio/Engine/WiFiWatchdog.exe .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item desktop/README.md dist/Studio/README.md
+          Copy-Item LICENSE dist/Studio/LICENSE
+          Compress-Archive -Path dist/Studio/* -DestinationPath dist/WiFiWatchdog-Studio-win-x64-preview.zip -Force
+          Get-FileHash dist/WiFiWatchdog-Studio-win-x64-preview.zip -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WiFiWatchdog-Studio-Windows-x64
+          path: dist/WiFiWatchdog-Studio-win-x64-preview.zip
+          if-no-files-found: error

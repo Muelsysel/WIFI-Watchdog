@@ -1,0 +1,92 @@
+name: Publish WiFi Watchdog Studio
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/studio-release.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Studio version (e.g. 0.2.0-preview.1); tag is studio-vVERSION"
+        required: true
+        default: "0.1.0-preview"
+
+permissions:
+  contents: write
+
+jobs:
+  release-studio:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Validate version and existing tag
+        id: version
+        shell: pwsh
+        env:
+          REQUEST_VERSION: ${{ inputs.version }}
+        run: |
+          $version = if ($env:REQUEST_VERSION) { $env:REQUEST_VERSION } else { '0.1.0-preview' }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[a-zA-Z0-9][a-zA-Z0-9.-]*)?$') {
+            throw "Invalid Studio release version: $version"
+          }
+          "version=$version" | Out-File -Encoding utf8 -Append $env:GITHUB_OUTPUT
+          "tag=studio-v$version" | Out-File -Encoding utf8 -Append $env:GITHUB_OUTPUT
+
+      - name: Test independent Studio core
+        shell: pwsh
+        run: |
+          dotnet run -c Release --project desktop/WiFiWatchdog.Studio.Tests/WiFiWatchdog.Studio.Tests.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build -c Release desktop/WiFiWatchdog.Studio/WiFiWatchdog.Studio.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -count=1 -timeout 2m ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish standalone x64 Windows app and portable engine
+        shell: pwsh
+        run: |
+          dotnet publish desktop/WiFiWatchdog.Studio/WiFiWatchdog.Studio.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=false -o dist/Studio
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist/Studio/Engine | Out-Null
+          $env:GOOS='windows'
+          $env:GOARCH='amd64'
+          $env:CGO_ENABLED='0'
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist/Studio/Engine/WiFiWatchdog.exe .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item desktop/README.md dist/Studio/README.md
+          Copy-Item LICENSE dist/Studio/LICENSE
+          "Studio Version: ${{ steps.version.outputs.version }}" | Out-File -Encoding utf8 dist/Studio/BUILDINFO.txt
+          "Source Commit: $env:GITHUB_SHA" | Add-Content dist/Studio/BUILDINFO.txt
+          "Build UTC: $([DateTime]::UtcNow.ToString('o'))" | Add-Content dist/Studio/BUILDINFO.txt
+          Compress-Archive -Path dist/Studio/* -DestinationPath dist/WiFiWatchdog-Studio-windows-amd64.zip -Force
+          $hash = (Get-FileHash dist/WiFiWatchdog-Studio-windows-amd64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  WiFiWatchdog-Studio-windows-amd64.zip" | Set-Content -Encoding utf8 dist/SHA256SUMS.txt
+
+      - name: Create Studio prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if (gh release view $env:TAG 2>$null) {
+            Write-Host "Studio release $env:TAG already exists; no mutation made."
+            exit 0
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a $env:TAG HEAD -m "WiFi Watchdog Studio $env:TAG"
+          git push origin $env:TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release create $env:TAG dist/WiFiWatchdog-Studio-windows-amd64.zip dist/SHA256SUMS.txt --prerelease --title "WiFi Watchdog Studio $env:TAG (Preview)" --notes "Independent Windows 11 WPF Studio companion to the unchanged Go portable edition. Includes local network diagnostics, event analytics, recovery profiles, Mihomo/TUN checks, sanitized exports and optional privileged Go engine launch. Preview: real Windows 11 acceptance testing, signing, installer, updater and enterprise security review remain pending."
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
