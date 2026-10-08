@@ -1304,6 +1304,10 @@ type settingsControls struct {
 	summarySystem uintptr
 	summaryWiFi   uintptr
 	summaryVPN    uintptr
+	memoryLine    uintptr
+	pages         map[int][]uintptr
+	muted         map[uintptr]bool
+	page          int
 
 	mu              sync.Mutex
 	startupKnown    bool
@@ -1326,16 +1330,16 @@ func createChild(parent uintptr, className, text string, style uint32, x, y, w, 
 		uintptr(unsafe.Pointer(wstr(className))),
 		uintptr(unsafe.Pointer(wstr(text))),
 		uintptr(WS_CHILD|WS_VISIBLE|style),
-		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+		uintptr(uiS(x)), uintptr(uiS(y)), uintptr(uiS(w)), uintptr(uiS(h)),
 		parent,
 		uintptr(id),
 		0,
 		0,
 	)
 	if hwnd != 0 {
-		font, _, _ := procGetStockObject.Call(DEFAULT_GUI_FONT)
+		font := uiDefaultFont()
 		if font != 0 {
-			procSendMessageW.Call(hwnd, WM_SETFONT, font, 1)
+			procSendMessageW.Call(hwnd, WM_SETFONT, font, 0)
 		}
 	}
 	return hwnd
@@ -1404,7 +1408,8 @@ func (a *App) runSettingsThread() {
 
 	screenW, _, _ := procGetSystemMetrics.Call(0)
 	screenH, _, _ := procGetSystemMetrics.Call(1)
-	width, height := int32(780), int32(770)
+	uiInit()
+	width, height := uiS(990), uiS(790)
 	x := int32(screenW)/2 - width/2
 	y := int32(screenH)/2 - height/2
 
@@ -1426,71 +1431,7 @@ func (a *App) runSettingsThread() {
 	sc := &settingsControls{hwnd: hwnd, edits: map[int]uintptr{}}
 	settingsMap.Store(hwnd, sc)
 
-	createChild(hwnd, "STATIC", "运行状态", 0, 24, 16, 120, 24, 0)
-	sc.summarySystem = createChild(hwnd, "STATIC", "系统互联网：正在后台刷新…", 0, 28, 46, 560, 22, 0)
-	sc.summaryWiFi = createChild(hwnd, "STATIC", "Wi-Fi：正在后台读取…", 0, 28, 72, 690, 22, 0)
-	sc.summaryVPN = createChild(hwnd, "STATIC", "VPN/TUN：正在后台检测…", 0, 28, 98, 690, 22, 0)
-	sc.refreshButton = createChild(hwnd, "BUTTON", "刷新状态", BS_PUSHBUTTON|WS_TABSTOP, 596, 42, 74, 29, ID_BUTTON_REFRESH)
-	createChild(hwnd, "BUTTON", "诊断报告", BS_PUSHBUTTON|WS_TABSTOP, 676, 42, 74, 29, ID_BUTTON_DIAG)
-	createChild(hwnd, "STATIC", "状态刷新、计划任务查询和配置保存都在后台执行，不会再阻塞窗口消息循环。", 0, 28, 126, 700, 22, 0)
-
-	createChild(hwnd, "STATIC", "监控与恢复参数", 0, 24, 166, 180, 24, 0)
-
-	type row struct {
-		label string
-		id    int
-		value int
-		unit  string
-	}
-	rows := []row{
-		{"正常检测间隔", ID_EDIT_NORMAL_MINUTES, c.NormalCheckIntervalMinutes, "分钟"},
-		{"异常快速复检", ID_EDIT_FAILURE_SECONDS, c.FailureCheckIntervalSeconds, "秒"},
-		{"连续失败阈值", ID_EDIT_FAILURE_COUNT, c.FailureThreshold, "次"},
-		{"恢复最小间隔", ID_EDIT_REPAIR_MINUTES, c.RepairRetryIntervalMinutes, "分钟"},
-		{"关闭网卡等待", ID_EDIT_DISABLE_SECONDS, c.WifiDisableWaitSeconds, "秒"},
-		{"网卡开启等待", ID_EDIT_STARTUP_SECONDS, c.WifiStartupWaitSeconds, "秒"},
-		{"Profile 重试次数", ID_EDIT_CONNECT_RETRY, c.ConnectRetryCount, "次"},
-		{"每次连接等待", ID_EDIT_CONNECT_DELAY, c.ConnectRetryDelaySeconds, "秒"},
-		{"DHCP 更新等待", ID_EDIT_DHCP_WAIT, c.DHCPRenewWaitSeconds, "秒"},
-		{"混合代理端口", ID_EDIT_VPN_PORT, c.VPNLocalPort, "0=自动"},
-		{"Mihomo 控制端口", ID_EDIT_MIHOMO_CONTROLLER, c.MihomoControllerPort, "0=禁用"},
-		{"单次探测超时", ID_EDIT_TIMEOUT_SECONDS, c.ConnectionTimeoutSeconds, "秒"},
-		{"日志保留时间", ID_EDIT_LOG_RETENTION, c.LogRetentionDays, "天"},
-	}
-
-	for i, r := range rows {
-		col := i / 7
-		rowIndex := i % 7
-		baseX := int32(28)
-		if col == 1 {
-			baseX = 398
-		}
-		yy := int32(202 + rowIndex*34)
-		createChild(hwnd, "STATIC", r.label, 0, baseX, yy+4, 150, 24, 0)
-		edit := createChild(hwnd, "EDIT", strconv.Itoa(r.value), WS_BORDER|WS_TABSTOP|ES_NUMBER, baseX+158, yy, 74, 27, r.id)
-		sc.edits[r.id] = edit
-		createChild(hwnd, "STATIC", r.unit, 0, baseX+240, yy+4, 74, 24, 0)
-	}
-
-	createChild(hwnd, "STATIC", "安全策略", 0, 24, 450, 160, 24, 0)
-	sc.vpnAware = createChild(hwnd, "BUTTON", "启用 VPN/TUN 保护：系统有网或底层证据不足时不重启 Wi-Fi", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 482, 650, 26, ID_CHECK_VPN_AWARE)
-	setCheck(sc.vpnAware, c.EnableVPNAware)
-
-	sc.autoReconnect = createChild(hwnd, "BUTTON", "Wi-Fi 意外断开时主动连接上一次成功的 WLAN Profile", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 514, 620, 26, ID_CHECK_AUTO_RECONNECT)
-	setCheck(sc.autoReconnect, c.AutoReconnectDisconnected)
-
-	sc.wlanSvc = createChild(hwnd, "BUTTON", "启用 WlanSvc 服务重启作为最后兜底（高级，默认关闭）", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 546, 620, 26, ID_CHECK_WLANSVC)
-	setCheck(sc.wlanSvc, c.EnableWlanServiceRestart)
-
-	sc.startup = createChild(hwnd, "BUTTON", "Windows 登录后自动启动（最高权限计划任务）", BS_AUTOCHECKBOX|WS_TABSTOP, 28, 578, 620, 26, ID_CHECK_STARTUP)
-	setCheck(sc.startup, c.StartWithWindows)
-
-	createChild(hwnd, "STATIC", "提示：恢复冷却会持久化到 state.json；即使重启程序，也不会绕过两次自动恢复之间的最小间隔。", 0, 28, 614, 710, 22, 0)
-	sc.statusLine = createChild(hwnd, "STATIC", "正在后台核对开机自启状态和网络状态…", 0, 28, 642, 710, 22, 0)
-
-	createChild(hwnd, "BUTTON", "恢复默认参数", BS_PUSHBUTTON|WS_TABSTOP, 28, 678, 112, 31, ID_BUTTON_DEFAULTS)
-	sc.saveButton = createChild(hwnd, "BUTTON", "保存", BS_DEFPUSHBUTTON|WS_TABSTOP, 568, 678, 86, 31, ID_BUTTON_SAVE)
-	sc.cancelButton = createChild(hwnd, "BUTTON", "取消", BS_PUSHBUTTON|WS_TABSTOP, 664, 678, 86, 31, ID_BUTTON_CANCEL)
+	buildFluentSettings(sc,c,a)
 
 	a.settingsMu.Lock()
 	a.settingsHwnd = hwnd
@@ -1500,7 +1441,7 @@ func (a *App) runSettingsThread() {
 	// Build the full control tree while hidden, then show it once. The settings
 	// UI now owns a dedicated OS thread and message queue, isolated from the tray
 	// and Explorer Shell calls on the main UI thread.
-	setControlText(sc.statusLine, "设置窗口已就绪。需要网络详情时点击“刷新状态”。")
+	setControlText(sc.statusLine, "所有设置在后台保存；点击概览页“刷新网络状态”更新详情。")
 	procShowWindow.Call(hwnd, SW_SHOW)
 	procSetForegroundWindow.Call(hwnd)
 
@@ -1703,6 +1644,7 @@ func (a *App) applySettingsRefresh(hwnd uintptr) {
 			setControlText(sc.summaryVPN, "VPN/TUN：未执行深度探测")
 		}
 	}
+	uiUpdateMemory(sc)
 	if startupKnown && !startupTouched {
 		setCheck(sc.startup, startupEnabled)
 	}
@@ -1892,10 +1834,16 @@ func (a *App) restoreSettingsDefaults(hwnd uintptr) {
 }
 
 func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
+	if handled,result:=uiHandleSettingsMessage(hwnd,message,wParam,lParam);handled {return result}
 	switch message {
 	case WM_COMMAND:
 		id := int(loword(wParam))
 		switch id {
+		case ID_NAV_OVERVIEW, ID_NAV_CHECKS, ID_NAV_RECOVERY, ID_NAV_VPN:
+			if v, ok := settingsMap.Load(hwnd); ok {
+				uiShowPage(v.(*settingsControls), id-ID_NAV_OVERVIEW)
+			}
+			return 0
 		case ID_BUTTON_SAVE:
 			if app != nil {
 				app.saveSettingsAsync(hwnd)
@@ -1946,6 +1894,7 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case WM_SETTINGS_ACTIVATE:
+		if v,ok:=settingsMap.Load(hwnd);ok { uiUpdateMemory(v.(*settingsControls)) }
 		procShowWindow.Call(hwnd, SW_SHOW)
 		procSetForegroundWindow.Call(hwnd)
 		return 0
@@ -2137,6 +2086,12 @@ func migrateLegacyLogs(dataDir, logDir string) {
 }
 
 func main() {
+	// A lower steady-state Go heap reduces idle memory without embedding a
+	// browser UI. The memory limit is a soft GC target, NOT an RSS limit.
+	// Environment-provided GOGC/GOMEMLIMIT remain authoritative.
+	if os.Getenv("GOGC")=="" { debug.SetGCPercent(70) }
+	if os.Getenv("GOMEMLIMIT")=="" { debug.SetMemoryLimit(96<<20) }
+
 	// Win32 windows and message queues are OS-thread-affine. Keep all UI creation
 	// and the message pump on one dedicated OS thread; goroutines must communicate
 	// back through PostMessage instead of touching the message loop.
