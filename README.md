@@ -2,7 +2,7 @@
 
 一个面向 Windows 的轻量级 Wi‑Fi 自动检测与恢复工具，重点适配校园网、802.1X、VPN/TUN、多网卡和无人值守场景。
 
-> 当前测试版本：**v1.5.1-rc.1**（Mihomo/TUN 联动诊断候选版）
+> 当前测试版本：**v1.6.0-rc.1**（Win11 现代界面 / 低内存候选版）
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
@@ -226,3 +226,15 @@ MIT License。见 [LICENSE](LICENSE)。
 如已启用控制接口 Secret，可将其通过进程环境变量 `WIFI_WATCHDOG_MIHOMO_SECRET` 提供；**不要将密码写入 GitHub、日志或公开 issue**。没有正确 Secret 时仍可检测本地代理端口和保护 Wi-Fi。该功能只读、不重启 VPN、不切换节点。
 
 说明与示例见 [配置文档](docs/CONFIGURATION.md)。
+
+## v1.6.0-rc.1：Fluent Lite 原生控制中心
+
+控制中心采用 **Windows 11 风格深色侧栏 + 浅色卡片**，分为运行概览、检测策略、Wi-Fi 恢复与 VPN/系统四个页面。原有配置项仍可编辑，保存方式、日志与网络恢复策略均兼容。
+
+这套界面只使用 Windows 原生 `user32.dll` / `gdi32.dll`，**没有引入 WebView2、Electron、浏览器进程或图片资源**；设置窗口关闭后，窗口及其控件会由 Windows 销毁。GDI 字体和画刷只创建一次并复用。
+
+概览页面显示实时监控状态、Wi-Fi/VPN 详情，以及 **工作集（Windows Working Set）/Go 堆（HeapAlloc）**。这两个数字含义不同，工作集更接近任务管理器中看到的物理内存驻留，但仍会受系统缓存与内存压力影响。
+
+为了减少闲置内存，默认设置 `GOGC=70` 的等效 GC 策略和 **96 MiB 的 Go 堆软目标**（不是总进程 RSS 硬上限）。已有 `GOGC`、`GOMEMLIMIT` 环境变量优先；更积极的 GC 可能稍微增加 CPU 使用率。程序不会在后台常驻重绘或刷新窗口。
+
+建议升级后用任务管理器对比运行 15 分钟时的“内存（专用工作集）”，并反复打开关闭设置窗口 20 次，确认资源占用是否回落。Win11 UI 响应性仍需实机确认。

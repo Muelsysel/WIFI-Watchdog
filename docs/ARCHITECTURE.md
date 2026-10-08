@@ -97,3 +97,13 @@ The recovery target and automatic cooldown timestamp are persisted in `state.jso
 - old daily logs are cleaned once per day when the first log entry is written;
 - legacy `watchdog.log` files are migrated into `logs/` on upgrade;
 - diagnostic reports live separately in `diagnostics/` and follow the same retention window.
+
+## Fluent Lite native UI and resource policy (v1.6.0 candidate)
+
+The settings window is a dedicated Win32 OS thread. Each child control is created once per opening and belongs to one of four pages. Switching pages shows/hides existing controls instead of reallocating or re-creating them. GDI fonts, pens and brushes are process-wide singletons; no image resources, rendering loop, browser engine or WebView2 is loaded.
+
+All long-running network/system operations remain off the UI thread. The overview receives monitor changes via asynchronous `PostMessage`. A memory readout is updated when the overview opens or an explicit network refresh completes, with no permanent UI sampling goroutine.
+
+Go GC defaults to `GOGC=70` and `GOMEMLIMIT=96MiB` equivalent soft target, both overridable through environment variables. The limit only applies to memory managed by the Go runtime and does not guarantee a process RSS limit.
+
+Physical working set (reported by the Windows process memory API) and Go live heap should not be compared directly; Windows-native allocations and shared pages can contribute to working set.

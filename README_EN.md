@@ -4,7 +4,7 @@ Repository: `https://github.com/Muelsysel/WIFI-Watchdog`
 
 WiFi Watchdog is a lightweight Windows tray utility for detecting and recovering broken Wi‑Fi connectivity, with special care for campus Wi‑Fi, 802.1X, VPN/TUN, multiple adapters, and unattended operation.
 
-Candidate version: **v1.5.1-rc.1**
+Candidate version: **v1.6.0-rc.1**
 
 Key ideas:
 
@@ -48,3 +48,12 @@ Daily logs are compacted above 16 MiB, keeping the newest ~8 MiB. Hang and crash
 The watchdog optionally inspects `127.0.0.1:9097` using read-only `GET /version` and `GET /configs`. The control center now exposes the controller port and the mixed proxy port. Use 2026 for your mixed port if it cannot be discovered from the authenticated controller.
 
 An unreachable controller is **not evidence of a dead core** (Clash Verge Rev may communicate over a Windows named pipe). We validate public HTTPS through the mixed proxy rather than assuming that a successful CONNECT handshake proves online status. API authorization uses an optional process environment variable `WIFI_WATCHDOG_MIHOMO_SECRET`; credentials never appear in JSON config or diagnostics. No automated Mihomo restart, mode modification, or proxy switching is performed.
+
+
+## v1.6.0-rc.1 Fluent Lite UI
+
+The control center uses a lightweight native Win32/GDI dashboard with a dark sidebar, light status cards and four sections (Overview, Check Policy, Wi-Fi Recovery, VPN/System). No WebView2, Electron, asset bundle or third-party GUI library is loaded. It retains keyboard-focusable native controls and stores settings in the same configuration file.
+
+The overview reports process working set and the current Go live heap separately. GDI fonts/brushes/pens are shared across window openings, and the window does not run animation or periodic repaint timers. The background runtime uses GC percentage 70 and a 96 MiB **soft Go heap target** unless `GOGC`/`GOMEMLIMIT` are set; this is not a hard Windows working-set cap.
+
+Verify layout, DPI scaling and idle/after-close memory behavior on actual Windows 11 hardware; automated build success is not a substitute.
