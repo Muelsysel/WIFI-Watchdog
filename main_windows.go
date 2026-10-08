@@ -43,6 +43,7 @@ const (
 	WM_SETTINGS_ACTIVATE     = WM_APP + 13
 	WM_SETTINGS_HEARTBEAT    = WM_APP + 14
 	WM_SETTINGS_SHUTDOWN     = WM_APP + 15
+	WM_SETTINGS_LIVE_STATUS  = WM_APP + 16
 
 	NIM_ADD    = 0x00000000
 	NIM_MODIFY = 0x00000001
@@ -571,6 +572,11 @@ func (a *App) setStatus(state MonitorState, text string, logIt bool) {
 	if a.statusPostPending.CompareAndSwap(false, true) {
 		procPostMessageW.Call(a.hwnd, WM_STATUS_UPDATE, 0, 0)
 	}
+	// UI-thread-safe dashboard update; the tray never calls child HWND APIs.
+	a.settingsMu.Lock()
+	settings := a.settingsHwnd
+	a.settingsMu.Unlock()
+	if settings != 0 { procPostMessageW.Call(settings, WM_SETTINGS_LIVE_STATUS, 0, 0) }
 }
 
 func (a *App) currentStatus() (MonitorState, string) {
@@ -1897,6 +1903,17 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 		if v,ok:=settingsMap.Load(hwnd);ok { uiUpdateMemory(v.(*settingsControls)) }
 		procShowWindow.Call(hwnd, SW_SHOW)
 		procSetForegroundWindow.Call(hwnd)
+		return 0
+	case WM_SETTINGS_LIVE_STATUS:
+		if app!=nil {
+			if v,ok:=settingsMap.Load(hwnd);ok {
+				sc:=v.(*settingsControls)
+				state,text:=app.currentStatus()
+				if sc.page==modernPageOverview {
+					setControlText(sc.summarySystem, fmt.Sprintf("后台监控 [%d]：%s", state, text))
+				}
+			}
+		}
 		return 0
 	case WM_SETTINGS_HEARTBEAT:
 		if app != nil {
