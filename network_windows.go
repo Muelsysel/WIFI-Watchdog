@@ -64,17 +64,17 @@ type WiFiUnderlayStatus struct {
 }
 
 type NetworkAssessment struct {
-	WiFi             wifiInfo
-	System           SystemProbeResult
-	VPN              VPNStatus
-	DeepChecked      bool
-	Underlay         WiFiUnderlayStatus
-	Online           bool
-	ShouldRepairWiFi bool
-	VPNProtected     bool
-	CaptiveProtected bool
+	WiFi              wifiInfo
+	System            SystemProbeResult
+	VPN               VPNStatus
+	DeepChecked       bool
+	Underlay          WiFiUnderlayStatus
+	Online            bool
+	ShouldRepairWiFi  bool
+	VPNProtected      bool
+	CaptiveProtected  bool
 	UnderlayProtected bool
-	Reason           string
+	Reason            string
 }
 
 func newSystemHTTPClient(timeout time.Duration) *http.Client {

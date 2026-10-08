@@ -603,7 +603,7 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 		return true
 	}
 	if !beforeRestart.ShouldRepairWiFi {
-		a.logger.warn("重启网卡前重新评估发现保护条件，跳过侵入式恢复："+beforeRestart.Reason)
+		a.logger.warn("重启网卡前重新评估发现保护条件，跳过侵入式恢复：" + beforeRestart.Reason)
 		return false
 	}
 	if beforeRestart.WiFi.Connected && !targetMatches(beforeRestart.WiFi, t) {

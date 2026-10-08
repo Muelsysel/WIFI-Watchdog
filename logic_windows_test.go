@@ -218,8 +218,8 @@ func TestResolveTargetDoesNotCrossWirelessAdapters(t *testing.T) {
 
 func TestProtectConfirmedWiFiUnderlayEvenWithoutVPN(t *testing.T) {
 	n := NetworkAssessment{
-		System: SystemProbeResult{Online: false},
-		WiFi: wifiInfo{Connected: true, SSID: "campus"},
+		System:   SystemProbeResult{Online: false},
+		WiFi:     wifiInfo{Connected: true, SSID: "campus"},
 		Underlay: WiFiUnderlayStatus{DirectProbeOK: true},
 	}
 	classifyNetworkAssessment(&n)
