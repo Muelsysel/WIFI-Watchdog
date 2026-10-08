@@ -779,6 +779,12 @@ func fastNativeWifiSnapshot() wifiInfo {
 }
 
 func (a *App) assessNetwork() NetworkAssessment {
+	return a.assessNetworkMode(false)
+}
+
+// assessNetworkMode is used only for explicit user-initiated checks/reports
+// when full=true. Regular monitoring always uses the fast early-success mode.
+func (a *App) assessNetworkMode(full bool) NetworkAssessment {
 	// Heavy assessment is serialized so the monitor loop, settings page and
 	// manual checks cannot stampede route/ARP/ping/HTTP probes.
 	a.assessmentMu.Lock()
@@ -789,7 +795,7 @@ func (a *App) assessNetwork() NetworkAssessment {
 	// Fast path first: when Windows really has usable Internet, there is no need
 	// to run netsh/route/ARP/underlay probes at all. This dramatically shortens
 	// the common path and removes a major source of perceived UI "hangs".
-	n.System = a.systemInternetProbe()
+	n.System = a.systemInternetProbeMode(full)
 	a.logSystemProbe(n.System)
 	if n.System.Online {
 		n.WiFi = fastNativeWifiSnapshot()
