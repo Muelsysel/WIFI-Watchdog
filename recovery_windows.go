@@ -560,6 +560,10 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 
 	current := detectWifi()
 	t = mergeTarget(t, a.resolveTarget(current))
+	if current.Connected && (t.ProfileName != "" || t.SSID != "") && !targetMatches(current, t) {
+		a.logger.warn("恢复目标与当前已连接网络不匹配，停止自动切换，避免打断新的 Wi-Fi 连接。")
+		return false
+	}
 	if t.ProfileName == "" && t.SSID == "" {
 		a.logger.err("没有可用的历史 Wi-Fi Profile/SSID，无法主动恢复。请先正常连接一次目标 Wi-Fi。")
 		return false
@@ -591,6 +595,20 @@ func (a *App) robustRepair(t RecoveryTarget) bool {
 	if a.hasInternet() {
 		a.logger.info("进入网卡重启前检测到互联网已自行恢复，取消网卡重启。")
 		return true
+	}
+	// Re-evaluate protection after soft reconnect: VPN routes, gateway
+	// reachability and the selected WLAN may have changed during recovery.
+	beforeRestart := a.assessNetwork()
+	if beforeRestart.Online {
+		return true
+	}
+	if !beforeRestart.ShouldRepairWiFi {
+		a.logger.warn("重启网卡前重新评估发现保护条件，跳过侵入式恢复："+beforeRestart.Reason)
+		return false
+	}
+	if beforeRestart.WiFi.Connected && !targetMatches(beforeRestart.WiFi, t) {
+		a.logger.warn("网卡重启前发现已切换到其他无线网络，停止恢复。")
+		return false
 	}
 	a.logger.warn("恢复层 3：重启无线网卡，然后强制连接保存的 WLAN Profile。")
 	if a.restartAdapter(t) {
