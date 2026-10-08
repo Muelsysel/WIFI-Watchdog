@@ -35,14 +35,14 @@ type MihomoStatus struct {
 
 func mihomoClient(timeout time.Duration) *http.Client {
 	tr := &http.Transport{
-		Proxy: nil,
-		DisableKeepAlives: true,
-		DialContext: (&net.Dialer{Timeout: timeout}).DialContext,
+		Proxy:                 nil,
+		DisableKeepAlives:     true,
+		DialContext:           (&net.Dialer{Timeout: timeout}).DialContext,
 		ResponseHeaderTimeout: timeout,
 	}
 	return &http.Client{
 		Transport: tr,
-		Timeout: timeout,
+		Timeout:   timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -72,7 +72,9 @@ func mihomoGET(ctx context.Context, client *http.Client, port int, path, secret 
 }
 
 type invalidControllerEndpoint struct{}
+
 func (invalidControllerEndpoint) Error() string { return "invalid local Mihomo controller endpoint" }
+
 var errInvalidControllerEndpoint error = invalidControllerEndpoint{}
 
 func probeMihomoController(port int, secret string, timeout time.Duration) MihomoStatus {
@@ -82,10 +84,10 @@ func probeMihomoController(port int, secret string, timeout time.Duration) Mihom
 		return out
 	}
 	if timeout < 150*time.Millisecond {
-		timeout = 150*time.Millisecond
+		timeout = 150 * time.Millisecond
 	}
 	if timeout > 4*time.Second {
-		timeout = 4*time.Second
+		timeout = 4 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*timeout)
 	defer cancel()
@@ -165,28 +167,28 @@ func probeValidatedMixedProxy(port int, timeout time.Duration) bool {
 		return false
 	}
 	if timeout < 300*time.Millisecond {
-		timeout = 300*time.Millisecond
+		timeout = 300 * time.Millisecond
 	}
 	if timeout > 5*time.Second {
-		timeout = 5*time.Second
+		timeout = 5 * time.Second
 	}
 	proxyURL := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
 	tr := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
-		DisableKeepAlives: true,
-		TLSHandshakeTimeout: timeout,
+		Proxy:                 http.ProxyURL(proxyURL),
+		DisableKeepAlives:     true,
+		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 	}
 	client := &http.Client{
 		Transport: tr,
-		Timeout: timeout,
+		Timeout:   timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 	defer tr.CloseIdleConnections()
 	targets := []struct {
-		url string
+		url   string
 		valid func(int, string) bool
 	}{
 		{"https://www.gstatic.com/generate_204", func(code int, _ string) bool { return code == 204 }},
@@ -201,9 +203,15 @@ func probeValidatedMixedProxy(port int, timeout time.Duration) bool {
 		t := t
 		go func() {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.url, nil)
-			if err != nil { results <- false; return }
+			if err != nil {
+				results <- false
+				return
+			}
 			res, err := client.Do(req)
-			if err != nil { results <- false; return }
+			if err != nil {
+				results <- false
+				return
+			}
 			defer res.Body.Close()
 			b, _ := io.ReadAll(io.LimitReader(res.Body, 256))
 			results <- t.valid(res.StatusCode, string(b))
@@ -212,7 +220,9 @@ func probeValidatedMixedProxy(port int, timeout time.Duration) bool {
 	for range targets {
 		select {
 		case valid := <-results:
-			if valid { return true }
+			if valid {
+				return true
+			}
 		case <-ctx.Done():
 			return false
 		}

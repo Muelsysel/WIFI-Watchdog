@@ -114,27 +114,27 @@ const (
 	ID_MENU_REMEMBER = 1008
 	ID_MENU_DIAG     = 1009
 
-	ID_EDIT_NORMAL_MINUTES  = 2001
-	ID_EDIT_FAILURE_SECONDS = 2002
-	ID_EDIT_FAILURE_COUNT   = 2003
-	ID_EDIT_REPAIR_MINUTES  = 2004
-	ID_EDIT_DISABLE_SECONDS = 2005
-	ID_EDIT_STARTUP_SECONDS = 2006
-	ID_CHECK_STARTUP        = 2007
-	ID_BUTTON_SAVE          = 2008
-	ID_BUTTON_CANCEL        = 2009
-	ID_EDIT_CONNECT_RETRY   = 2010
-	ID_EDIT_CONNECT_DELAY   = 2011
-	ID_EDIT_DHCP_WAIT       = 2012
-	ID_CHECK_AUTO_RECONNECT = 2013
-	ID_CHECK_WLANSVC        = 2014
-	ID_CHECK_VPN_AWARE      = 2015
-	ID_EDIT_VPN_PORT        = 2016
-	ID_BUTTON_REFRESH       = 2017
-	ID_BUTTON_DEFAULTS      = 2018
-	ID_BUTTON_DIAG          = 2019
-	ID_EDIT_TIMEOUT_SECONDS = 2020
-	ID_EDIT_LOG_RETENTION   = 2021
+	ID_EDIT_NORMAL_MINUTES    = 2001
+	ID_EDIT_FAILURE_SECONDS   = 2002
+	ID_EDIT_FAILURE_COUNT     = 2003
+	ID_EDIT_REPAIR_MINUTES    = 2004
+	ID_EDIT_DISABLE_SECONDS   = 2005
+	ID_EDIT_STARTUP_SECONDS   = 2006
+	ID_CHECK_STARTUP          = 2007
+	ID_BUTTON_SAVE            = 2008
+	ID_BUTTON_CANCEL          = 2009
+	ID_EDIT_CONNECT_RETRY     = 2010
+	ID_EDIT_CONNECT_DELAY     = 2011
+	ID_EDIT_DHCP_WAIT         = 2012
+	ID_CHECK_AUTO_RECONNECT   = 2013
+	ID_CHECK_WLANSVC          = 2014
+	ID_CHECK_VPN_AWARE        = 2015
+	ID_EDIT_VPN_PORT          = 2016
+	ID_BUTTON_REFRESH         = 2017
+	ID_BUTTON_DEFAULTS        = 2018
+	ID_BUTTON_DIAG            = 2019
+	ID_EDIT_TIMEOUT_SECONDS   = 2020
+	ID_EDIT_LOG_RETENTION     = 2021
 	ID_EDIT_MIHOMO_CONTROLLER = 2022
 )
 
@@ -301,7 +301,7 @@ func defaultConfig() Config {
 		AutoReconnectDisconnected:   false,
 		EnableWlanServiceRestart:    false,
 		EnableVPNAware:              true,
-		VPNLocalPort:                0, // auto-discover when the controller is available
+		VPNLocalPort:                0,    // auto-discover when the controller is available
 		MihomoControllerPort:        9097, // TCP API may be disabled in Clash Verge Rev
 		LogRetentionDays:            30,
 		StartWithWindows:            false,
@@ -1864,19 +1864,19 @@ func (a *App) restoreSettingsDefaults(hwnd uintptr) {
 	sc := v.(*settingsControls)
 	d := defaultConfig()
 	values := map[int]int{
-		ID_EDIT_NORMAL_MINUTES:  d.NormalCheckIntervalMinutes,
-		ID_EDIT_FAILURE_SECONDS: d.FailureCheckIntervalSeconds,
-		ID_EDIT_FAILURE_COUNT:   d.FailureThreshold,
-		ID_EDIT_REPAIR_MINUTES:  d.RepairRetryIntervalMinutes,
-		ID_EDIT_DISABLE_SECONDS: d.WifiDisableWaitSeconds,
-		ID_EDIT_STARTUP_SECONDS: d.WifiStartupWaitSeconds,
-		ID_EDIT_CONNECT_RETRY:   d.ConnectRetryCount,
-		ID_EDIT_CONNECT_DELAY:   d.ConnectRetryDelaySeconds,
-		ID_EDIT_DHCP_WAIT:       d.DHCPRenewWaitSeconds,
-		ID_EDIT_VPN_PORT:        d.VPNLocalPort,
+		ID_EDIT_NORMAL_MINUTES:    d.NormalCheckIntervalMinutes,
+		ID_EDIT_FAILURE_SECONDS:   d.FailureCheckIntervalSeconds,
+		ID_EDIT_FAILURE_COUNT:     d.FailureThreshold,
+		ID_EDIT_REPAIR_MINUTES:    d.RepairRetryIntervalMinutes,
+		ID_EDIT_DISABLE_SECONDS:   d.WifiDisableWaitSeconds,
+		ID_EDIT_STARTUP_SECONDS:   d.WifiStartupWaitSeconds,
+		ID_EDIT_CONNECT_RETRY:     d.ConnectRetryCount,
+		ID_EDIT_CONNECT_DELAY:     d.ConnectRetryDelaySeconds,
+		ID_EDIT_DHCP_WAIT:         d.DHCPRenewWaitSeconds,
+		ID_EDIT_VPN_PORT:          d.VPNLocalPort,
 		ID_EDIT_MIHOMO_CONTROLLER: d.MihomoControllerPort,
-		ID_EDIT_TIMEOUT_SECONDS: d.ConnectionTimeoutSeconds,
-		ID_EDIT_LOG_RETENTION:   d.LogRetentionDays,
+		ID_EDIT_TIMEOUT_SECONDS:   d.ConnectionTimeoutSeconds,
+		ID_EDIT_LOG_RETENTION:     d.LogRetentionDays,
 	}
 	for id, value := range values {
 		setControlText(sc.edits[id], strconv.Itoa(value))

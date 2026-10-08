@@ -78,7 +78,9 @@ func TestMihomoUnauthorizedCannotBeMistakenForCoreDown(t *testing.T) {
 func TestMihomoUnboundPortIsUnknownNotCoreStopped(t *testing.T) {
 	// Take a port returned by a listener that has already been closed.
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 	s := probeMihomoController(port, "", 300*time.Millisecond)
@@ -133,9 +135,9 @@ func TestProxyCONNECTAloneDoesNotProveHTTPSInternet(t *testing.T) {
 
 func TestProxyHTTPSHealthProtectsWiFiEvenWithUnderlayFailures(t *testing.T) {
 	n := NetworkAssessment{
-		System: SystemProbeResult{Online: false},
-		WiFi: wifiInfo{Connected: true, InterfaceName: "WLAN"},
-		VPN: VPNStatus{Detected: true, ProxyUpstreamOK: true},
+		System:   SystemProbeResult{Online: false},
+		WiFi:     wifiInfo{Connected: true, InterfaceName: "WLAN"},
+		VPN:      VPNStatus{Detected: true, ProxyUpstreamOK: true},
 		Underlay: WiFiUnderlayStatus{StrongFault: true, IPv4: net.IPv4(192, 168, 1, 42)},
 	}
 	classifyNetworkAssessment(&n)
@@ -146,9 +148,9 @@ func TestProxyHTTPSHealthProtectsWiFiEvenWithUnderlayFailures(t *testing.T) {
 
 func TestMihomoTCPAuthFailureProtectsHealthyAssociatedWiFi(t *testing.T) {
 	n := NetworkAssessment{
-		System: SystemProbeResult{Online: false},
-		WiFi: wifiInfo{Connected: true, InterfaceName: "WLAN"},
-		VPN: VPNStatus{Detected: true, Mihomo: MihomoStatus{Available: true, Unauthorized: true}},
+		System:   SystemProbeResult{Online: false},
+		WiFi:     wifiInfo{Connected: true, InterfaceName: "WLAN"},
+		VPN:      VPNStatus{Detected: true, Mihomo: MihomoStatus{Available: true, Unauthorized: true}},
 		Underlay: WiFiUnderlayStatus{StructuralHealthy: true},
 	}
 	classifyNetworkAssessment(&n)
