@@ -110,6 +110,11 @@ public sealed class PresetStore
     }
 
     public void Save(string name, JsonObject configuration) => new ConfigStore(FilePath(name)).Save(configuration);
-    public JsonObject Load(string name) => new ConfigStore(FilePath(name)).Read();
+    public JsonObject Load(string name)
+    {
+        var path = FilePath(name);
+        if (!File.Exists(path)) throw new FileNotFoundException("Profile is missing.", path);
+        return new ConfigStore(path).Read();
+    }
     public void Remove(string name) => File.Delete(FilePath(name));
 }
