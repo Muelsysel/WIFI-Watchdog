@@ -408,6 +408,10 @@ func (a *App) flushDNS() {
 func (a *App) renewDHCP(t RecoveryTarget) {
 	c := a.getConfig()
 	alias := t.InterfaceName
+	if alias == "" && t.InterfaceGUID != "" {
+		a.logger.warn("目标 WLAN 已知 GUID 但接口别名未知，为防止对其他网卡续租 DHCP，跳过此层。")
+		return
+	}
 	if alias == "" {
 		alias = detectWifiNetsh().InterfaceName
 	}
@@ -500,9 +504,12 @@ func (a *App) setAdapterEnabledPowerShell(t RecoveryTarget, enabled bool) error 
 func (a *App) restartAdapter(t RecoveryTarget) bool {
 	c := a.getConfig()
 	alias := t.InterfaceName
-	if alias == "" {
-		alias = detectWifiNetsh().InterfaceName
+	if alias == "" && t.InterfaceGUID == "" {
+		a.logger.warn("缺少目标网卡 GUID 与接口名称，禁止自动禁用未知网卡。")
+		return false
 	}
+	// Never borrow a netsh alias from an arbitrary adapter if only a stable
+	// GUID was remembered. In this case PowerShell selects the adapter by GUID.
 
 	a.logger.warn("兜底层：准备重启 Wi-Fi 网卡。")
 	err := a.setAdapterEnabledNetsh(alias, false)
