@@ -490,6 +490,7 @@ type App struct {
 	stateMu      sync.Mutex
 	workers      sync.WaitGroup
 	workerMu     sync.Mutex
+	lastAutoRepairAt atomic.Int64
 
 	settingsMu      sync.Mutex
 	settingsHwnd    uintptr
