@@ -6,6 +6,10 @@
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
+## Studio v0.2 Preview：网络适配器与智能诊断历史
+
+Studio 独立 WPF 桌面版现已增加**适配器与 DNS/IP 详情、45 天本地脱敏诊断历史、分层故障建议、配置修改冲突检测**，以及降低日志图表刷新内存分配的改进。Go 便携版和既有 v1.6.1 下载包仍保持不变。
+
 ## 两种产品版本（Portable + Studio）
 
 本项目现在维护**两个互不取代的 Windows 版本**：
