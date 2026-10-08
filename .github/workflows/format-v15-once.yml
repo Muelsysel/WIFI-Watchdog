@@ -1,0 +1,37 @@
+name: Format v1.5 candidate once
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.head_ref == 'hardening-v1.5.0'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: hardening-v1.5.0
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Normalize Go formatting
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem . -Filter '*.go' -File | ForEach-Object { $_.FullName }
+          gofmt -w $files
+          git -c core.autocrlf=false add -- '*.go'
+          if (git diff --cached --quiet) {
+            Write-Host 'No formatting changes.'
+            exit 0
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'style: gofmt v1.5 hardening code'
+          git push origin HEAD:hardening-v1.5.0
