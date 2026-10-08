@@ -108,6 +108,16 @@ func uiInit() {
 		u := &fluent.assets
 		u.dpi = 1.0
 		if r, _, _ := procGetDpiForSystem.Call(); r >= 96 && r <= 384 { u.dpi = float64(r)/96.0 }
+		// Fit even on Win11 laptops with 150%-200% system scaling.
+		screenW,_,_:=procGetSystemMetrics.Call(0)
+		screenH,_,_:=procGetSystemMetrics.Call(1)
+		if screenW>0 && screenH>0 {
+			limitW:=float64(screenW-40)/990
+			limitH:=float64(screenH-72)/790
+			if limitW>0 && u.dpi>limitW {u.dpi=limitW}
+			if limitH>0 && u.dpi>limitH {u.dpi=limitH}
+			if u.dpi<0.75 {u.dpi=0.75}
+		}
 		brush := func(r,g,b uint32) uintptr { h,_,_:=procCreateSolidBrush.Call(uiRGB(r,g,b)); return h }
 		u.background=brush(245,247,252)
 		u.sidebar=brush(16,28,51)
@@ -223,6 +233,7 @@ func uiShowPage(sc *settingsControls,page int) {
 		for _,h:=range controls { procShowWindow.Call(h,mode) }
 	}
 	procInvalidateRect.Call(sc.hwnd,0,0)
+	for _,h:=range sc.pages[-1] {procInvalidateRect.Call(h,0,1)}
 	if page==modernPageOverview { uiUpdateMemory(sc) }
 }
 
@@ -319,7 +330,7 @@ func uiPaintButton(di *uiDrawItem,sc *settingsControls) bool {
 	var brush,pen,color uintptr
 	if isNav {
 		brush=u.sidebar
-		pen=u.sidebar
+		pen=u.navPen
 		color=uiRGB(191,208,230)
 		if sc!=nil && sc.page==page {
 			brush=u.navActive
