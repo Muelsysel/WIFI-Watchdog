@@ -12,7 +12,7 @@ public static class ReportExporter
     {
         var sanitized = new
         {
-            version = "studio-preview-0.1",
+            version = "studio-preview-0.2",
             at = report.Created,
             system = report.Endpoints.Select(x => new { x.Name, x.Status, x.Valid, x.Milliseconds, x.Detail }),
             controller = new { report.Controller.Available, report.Controller.AuthRequired,
@@ -26,7 +26,16 @@ public static class ReportExporter
 
     public static string EventsCsv(IEnumerable<WatchdogEvent> events)
     {
-        static string Escape(string value) => "\"" + value.Replace("\"", "\"\"").Replace("\r", " ").Replace("\n", " ") + "\"";
+        static string Escape(string value)
+        {
+            // CSV formula injection: spreadsheet apps can evaluate log text
+            // starting with =, +, -, @, or tab. Encode as literal text.
+            var cleaned = value.Replace("\r", " ").Replace("\n", " ");
+            var start = cleaned.TrimStart(' ', '\t');
+            if (start.Length > 0 && "=+-@".Contains(start[0]) || cleaned.StartsWith('\t'))
+                cleaned = "'" + cleaned;
+            return "\"" + cleaned.Replace("\"", "\"\"") + "\"";
+        }
         var sb = new StringBuilder("\uFEFFTime,Level,Message\r\n");
         foreach (var item in events)
         {
