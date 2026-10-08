@@ -1934,7 +1934,9 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 			busy := sc.saveInProgress
 			sc.mu.Unlock()
 			if busy {
-				messageBox(hwnd, "WiFi Watchdog", "设置正在保存，请等待后台操作完成。", MB_OK|MB_ICONINFO)
+				// Never show a modal dialog in the Win11 settings message pump:
+				// a short async save should not look like a frozen window.
+				setControlText(sc.statusLine, "后台正在保存设置，请稍候再关闭窗口。")
 				return 0
 			}
 		}
