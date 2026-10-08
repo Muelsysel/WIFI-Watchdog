@@ -31,6 +31,7 @@ const (
 	wmPaint         = 0x000F
 	wmEraseBkgnd    = 0x0014
 	wmCtlColorEdit  = 0x0133
+	wmCtlColorButton = 0x0135
 	wmCtlColorStatic = 0x0138
 	wmDrawItem      = 0x002B
 	bsOwnerDraw     = 0x0000000B
@@ -361,8 +362,13 @@ func uiHandleSettingsMessage(hwnd uintptr,message uint32,wParam,lParam uintptr) 
 	case wmPaint:
 		uiPaintSettings(hwnd)
 		return true,0
-	case wmCtlColorStatic,wmCtlColorEdit:
+	case wmCtlColorStatic,wmCtlColorEdit,wmCtlColorButton:
 		uiInit()
+		if message==wmCtlColorButton {
+			procSetBkMode.Call(wParam,transparentBk)
+			procSetTextColor.Call(wParam,uiRGB(31,49,81))
+			return true,fluent.assets.white
+		}
 		if message==wmCtlColorEdit {
 			procSetTextColor.Call(wParam,uiRGB(30,49,80))
 			procSetBkColor.Call(wParam,uiRGB(255,255,255))
