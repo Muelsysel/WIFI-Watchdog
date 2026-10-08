@@ -319,8 +319,8 @@ func TestFutureDatedCooldownNeverExceedsConfiguredInterval(t *testing.T) {
 
 func TestWin11UnknownInterfaceAliasCannotTriggerReset(t *testing.T) {
 	n := NetworkAssessment{
-		System: SystemProbeResult{Online: false},
-		WiFi:   wifiInfo{Connected: true, InterfaceGUID: "{ABC}"},
+		System:   SystemProbeResult{Online: false},
+		WiFi:     wifiInfo{Connected: true, InterfaceGUID: "{ABC}"},
 		Underlay: WiFiUnderlayStatus{StrongFault: true},
 	}
 	classifyNetworkAssessment(&n)
