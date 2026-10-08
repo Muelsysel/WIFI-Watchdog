@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.1-rc.1 — Correct Internet probe reporting
+
+- Regular unattended checks still return immediately on the **first validated HTTP result** to minimize latency and CPU/network activity.
+- Stop displaying `HTTP有效=1/4` as though it were a success rate. Instead log HTTP results collected, validated, rejected, failed, and **unverified after fast early exit**.
+- The three remaining requests may have been cancelled or never collected; they must **not** be treated as unavailable sites.
+- The explicit tray **Immediate Check**, settings **Refresh Network Status**, and **Generate Diagnostic Report** now run the **complete four-endpoint check** with individual HTTP status codes, elapsed milliseconds, validation result and connection errors.
+- Keep exactly the same Microsoft/Google/Baidu test endpoints and acceptance criteria; TCP fallback is only used if all HTTP endpoints fail.
+- Add deterministic local HTTP-server regression tests for fast early exit, full four-target results, unexpected HTTP status and timeouts.
+
 ## v1.6.0-rc.1 — Fluent Lite Win11 dashboard and low-memory controls
 
 - Replace the crowded single-page settings dialog with four focused sections: overview, detection policy, Wi-Fi recovery, and VPN/system.
