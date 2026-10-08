@@ -74,7 +74,7 @@ type processMemoryCountersEx struct {
 type fluentAssets struct {
 	dpi                                                                                 float64
 	background, sidebar, white, navActive, accent, accentSoft, border, pale, mutedBrush uintptr
-	borderPen, navPen, clearPen                                                         uintptr
+	borderPen, navPen, clearPen, accentPen, sidebarPen                                 uintptr
 	font, heading, title                                                                uintptr
 }
 
@@ -142,6 +142,8 @@ func uiInit() {
 		u.borderPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(226, 232, 242))
 		u.navPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(35, 57, 93))
 		u.clearPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(245, 247, 252))
+		u.accentPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(35, 105, 235))
+		u.sidebarPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(16, 28, 51))
 		u.font = uiCreateFont(15, 400)
 		u.heading = uiCreateFont(19, 600)
 		u.title = uiCreateFont(26, 700)
@@ -369,7 +371,7 @@ func uiPaintButton(di *uiDrawItem, sc *settingsControls) bool {
 	var brush, pen, color uintptr
 	if isNav {
 		brush = u.sidebar
-		pen = u.navPen
+		pen = u.sidebarPen
 		color = uiRGB(191, 208, 230)
 		if sc != nil && sc.page == page {
 			brush = u.navActive
@@ -382,7 +384,7 @@ func uiPaintButton(di *uiDrawItem, sc *settingsControls) bool {
 		color = uiRGB(40, 60, 92)
 		if id == ID_BUTTON_SAVE || id == ID_BUTTON_REFRESH {
 			brush = u.accent
-			pen = u.accent
+			pen = u.accentPen
 			color = uiRGB(255, 255, 255)
 		}
 	}
