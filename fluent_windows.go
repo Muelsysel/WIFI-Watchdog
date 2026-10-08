@@ -100,6 +100,7 @@ var (
 	procRoundRect            = gdi32.NewProc("RoundRect")
 	procCreateFontW          = gdi32.NewProc("CreateFontW")
 	procGetCurrentProcess    = kernel32.NewProc("GetCurrentProcess")
+	procReadProcessMemory = kernel32.NewProc("ReadProcessMemory")
 	psapi                    = syscall.NewLazyDLL("psapi.dll")
 	procGetProcessMemoryInfo = psapi.NewProc("GetProcessMemoryInfo")
 )
@@ -427,15 +428,24 @@ func uiHandleSettingsMessage(hwnd uintptr, message uint32, wParam, lParam uintpt
 		procSetTextColor.Call(wParam, colour)
 		return true, fluent.assets.white
 	case wmDrawItem:
-		di := (*uiDrawItem)(unsafe.Pointer(lParam))
-		if di == nil {
+		if lParam == 0 {
+			return true, 0
+		}
+		// Win32 owns the DRAWITEMSTRUCT. Copy it without an unchecked
+		// uintptr-to-pointer cast, which go vet rejects.
+		var di uiDrawItem
+		var copied uintptr
+		size := uintptr(unsafe.Sizeof(di))
+		process, _, _ := procGetCurrentProcess.Call()
+		ok, _, _ := procReadProcessMemory.Call(process, lParam, uintptr(unsafe.Pointer(&di)), size, uintptr(unsafe.Pointer(&copied)))
+		if ok == 0 || copied != size {
 			return true, 0
 		}
 		var sc *settingsControls
 		if v, ok := settingsMap.Load(hwnd); ok {
 			sc = v.(*settingsControls)
 		}
-		if uiPaintButton(di, sc) {
+		if uiPaintButton(&di, sc) {
 			return true, 1
 		}
 	}
