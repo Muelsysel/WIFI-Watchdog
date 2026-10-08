@@ -461,6 +461,7 @@ type App struct {
 	assessmentMu sync.Mutex
 	stateMu      sync.Mutex
 	workers      sync.WaitGroup
+	workerMu     sync.Mutex
 
 	settingsMu      sync.Mutex
 	settingsHwnd    uintptr
@@ -551,14 +552,16 @@ func (a *App) wake() {
 }
 
 func (a *App) stop() {
+	a.workerMu.Lock()
 	a.onceStop.Do(func() { close(a.stopCh) })
+	a.workerMu.Unlock()
 }
 
 func (a *App) reportRecoveredPanic(scope string, recovered any) {
 	stack := debug.Stack()
 	msg := fmt.Sprintf("%s panic: %v", scope, recovered)
 	if a.logger != nil {
-		a.logger.err(msg + "\r\n" + string(stack))
+		a.logger.err(msg + "；完整堆栈将写入独立的 crash 报告。")
 	}
 	dir := filepath.Join(a.dataDir, "diagnostics")
 	_ = os.MkdirAll(dir, 0755)
@@ -570,7 +573,17 @@ func (a *App) reportRecoveredPanic(scope string, recovered any) {
 }
 
 func (a *App) goSafe(scope string, fn func()) {
+	// Synchronize Add with stop/Wait: WaitGroup.Add at zero concurrently with
+	// Wait can panic, especially when the settings window closes during exit.
+	a.workerMu.Lock()
+	select {
+	case <-a.stopCh:
+		a.workerMu.Unlock()
+		return
+	default:
+	}
 	a.workers.Add(1)
+	a.workerMu.Unlock()
 	go func() {
 		defer a.workers.Done()
 		defer func() {
@@ -895,6 +908,14 @@ func (a *App) monitorLoop() {
 
 		// VPN/TUN protection: if the physical Wi-Fi has no strong fault evidence,
 		// never reset it merely because the VPN/system egress is broken.
+		if latest.UnderlayProtected {
+			a.setStatus(StateWaitingRetry,
+				fmt.Sprintf("物理 Wi-Fi 直连正常，更像代理/DNS/系统路由异常；%d 分钟后重检。", c.RepairRetryIntervalMinutes), true)
+			if !a.delayOrWake(time.Duration(c.RepairRetryIntervalMinutes) * time.Minute) {
+				return
+			}
+			continue
+		}
 		if latest.VPNProtected {
 			a.setStatus(StateVPNProtected,
 				fmt.Sprintf("检测到 VPN/TUN；Wi-Fi 底层未见强故障，跳过 Wi-Fi 恢复。%d 分钟后重检。", c.RepairRetryIntervalMinutes), true)
@@ -943,7 +964,7 @@ func (a *App) monitorLoop() {
 					a.setStatus(StateOnline, "恢复冷却期间网络已自行恢复。", true)
 					break
 				}
-				if latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
+				if latest.UnderlayProtected || latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
 					a.setStatus(StateVPNProtected, "冷却结束后重新评估：当前不适合自动操作 Wi-Fi。", true)
 					break
 				}
@@ -972,7 +993,7 @@ func (a *App) monitorLoop() {
 				a.setStatus(StateOnline, "等待期间系统网络已自行恢复，无需再次操作 Wi-Fi。", true)
 				break
 			}
-			if latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
+			if latest.UnderlayProtected || latest.VPNProtected || latest.CaptiveProtected || !latest.ShouldRepairWiFi {
 				a.setStatus(StateVPNProtected, "当前更像 VPN/TUN/认证层问题，停止连续操作 Wi-Fi，返回保护监控。", true)
 				break
 			}
@@ -1318,9 +1339,7 @@ func (a *App) showSettings() {
 	a.settingsOpening = true
 	a.settingsMu.Unlock()
 
-	a.workers.Add(1)
-	go func() {
-		defer a.workers.Done()
+	a.goSafe("settings-ui", func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer func() {
@@ -1337,7 +1356,7 @@ func (a *App) showSettings() {
 			}
 		}()
 		a.runSettingsThread()
-	}()
+	})
 }
 
 func (a *App) runSettingsThread() {
@@ -1545,9 +1564,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 	procEnableWindow.Call(sc.refreshButton, 0)
 	setControlText(sc.statusLine, "正在后台刷新网络状态和开机自启状态…")
 
-	a.workers.Add(1)
-	go func() {
-		defer a.workers.Done()
+	a.goSafe("settings-refresh", func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				if v, ok := settingsMap.Load(hwnd); ok {
@@ -1581,7 +1598,7 @@ func (a *App) startSettingsRefresh(hwnd uintptr) {
 		sc.refreshing = false
 		sc.mu.Unlock()
 		procPostMessageW.Call(hwnd, WM_SETTINGS_REFRESH_DONE, 0, 0)
-	}()
+	})
 }
 
 func (a *App) applySettingsRefresh(hwnd uintptr) {
@@ -1721,9 +1738,7 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 	setControlText(sc.statusLine, "正在后台保存设置；窗口仍可响应，不会阻塞 UI…")
 
 	old := a.getConfig()
-	a.workers.Add(1)
-	go func() {
-		defer a.workers.Done()
+	a.goSafe("settings-save", func() {
 		var saveErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -1754,7 +1769,7 @@ func (a *App) saveSettingsAsync(hwnd uintptr) {
 				_ = setStartupTask(old.StartWithWindows)
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) finishSettingsSave(hwnd uintptr) {
@@ -2164,7 +2179,7 @@ func main() {
 	select {
 	case <-done:
 		logger.info("后台任务已安全结束。")
-	case <-time.After(15 * time.Second):
-		logger.warn("退出等待后台任务超过 15 秒，程序将结束。")
+	case <-time.After(150 * time.Second):
+		logger.warn("退出等待后台任务超过 150 秒，仍有任务在执行；请检查网卡启用状态。")
 	}
 }
