@@ -56,11 +56,37 @@ public static class LogHistory
         {
             var date = DateTime.Today.AddDays(-i).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             var file = Path.Combine(directory, "watchdog-" + date + ".log");
-            var entries = ReadTail(file, 30000, 16 * 1024 * 1024);
-            summaries.Add(new DaySummary(date, entries.Count(e => e.Level == "INFO"),
-                entries.Count(e => e.Level == "WARN"), entries.Count(e => e.Level == "ERROR"),
-                entries.Count(e => e.Message.Contains("恢复层", StringComparison.Ordinal) ||
-                                   e.Message.Contains("恢复成功", StringComparison.Ordinal))));
+            // Stream through each day's bounded engine log. The previous
+            // version materialized up to 16 MiB * 14 days every refresh,
+            // wasting both allocations and memory on idle dashboards.
+            var info = 0;
+            var warn = 0;
+            var error = 0;
+            var recovery = 0;
+            if (File.Exists(file))
+            {
+                using var fs = new FileStream(file, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(fs, Encoding.UTF8,
+                    detectEncodingFromByteOrderMarks: true, bufferSize: 16 * 1024);
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                {
+                    // Avoid creating a WatchdogEvent object for each line.
+                    var parsed = ParseLine(line);
+                    if (parsed is null) continue;
+                    switch (parsed.Level)
+                    {
+                        case "INFO": info++; break;
+                        case "WARN": warn++; break;
+                        case "ERROR": error++; break;
+                    }
+                    if (parsed.Message.Contains("恢复层", StringComparison.Ordinal) ||
+                        parsed.Message.Contains("恢复成功", StringComparison.Ordinal))
+                        recovery++;
+                }
+            }
+            summaries.Add(new DaySummary(date, info, warn, error, recovery));
         }
         return summaries;
     }
