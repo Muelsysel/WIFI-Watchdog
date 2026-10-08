@@ -32,7 +32,7 @@ jobs:
         run: dotnet run -c Release --project desktop/WiFiWatchdog.Studio.Tests/WiFiWatchdog.Studio.Tests.csproj
 
       - name: Compile native Windows desktop UI
-        run: dotnet build desktop/WiFiWatchdog.Studio/WiFiWatchdog.Studio.csproj -c Release --no-restore
+        run: dotnet build desktop/WiFiWatchdog.Studio/WiFiWatchdog.Studio.csproj -c Release
         # restore is performed explicitly below in future release jobs
 
       - name: Publish self-contained x64 Studio
