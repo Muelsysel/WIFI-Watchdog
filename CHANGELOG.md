@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.6.0-rc.1 — Fluent Lite Win11 dashboard and low-memory controls
+
+- Replace the crowded single-page settings dialog with four focused sections: overview, detection policy, Wi-Fi recovery, and VPN/system.
+- Introduce Fluent-inspired native Win32/GDI visual design: dark navigation rail, light rounded cards, consistent typography, color-coded network status and clearer forms.
+- Keep controls keyboard-focusable and expose the actual numeric/checkbox settings in the existing JSON schema.
+- Add per-window DPI-aware scaling with a physical-screen fit guard for smaller Windows 11 laptops.
+- Add overview memory readout showing Windows process **working set** and current **Go live heap**; the numbers are different by design.
+- Reuse process-wide fonts, brushes and pens, avoid images/WebView/Electron and avoid UI polling timers.
+- Keep live monitor status synchronized via asynchronous `PostMessage`, not blocking cross-thread `SendMessage`.
+- Use a lower default Go GC percentage (70) and a soft Go memory target (96 MiB), overridable by `GOGC` and `GOMEMLIMIT`. These are not hard working-set limits.
+- Existing VPN/TUN diagnostics, Wi-Fi fail-safe recovery and daily log cleanup remain unchanged. No extra dependencies added.
+
+**Testing:** CI can validate Windows compile and logic, but UI layout, text scaling and focus behavior need on-device Windows 11 acceptance testing. Working set must be measured on actual user hardware.
+
 ## v1.5.1-rc.1 — Mihomo/TUN-aware diagnostics
 
 - Add local-only, read-only Mihomo controller inspection (`/version`, `/configs`), including explicit authentication state, effective Rule/Global/Direct mode, runtime TUN flag and actual mixed port.
