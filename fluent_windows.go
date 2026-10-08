@@ -40,6 +40,8 @@ const (
 	dtVCenter        = 0x00000004
 	dtSingleLine     = 0x00000020
 	odsDisabled      = 0x0004
+	odsSelected      = 0x0001
+	odsFocus         = 0x0010
 	psSolid          = 0
 )
 
@@ -90,6 +92,7 @@ var (
 	procGetClientRect        = user32.NewProc("GetClientRect")
 	procFillRect             = user32.NewProc("FillRect")
 	procInvalidateRect       = user32.NewProc("InvalidateRect")
+	procDrawFocusRect        = user32.NewProc("DrawFocusRect")
 	procDrawTextW            = user32.NewProc("DrawTextW")
 	procSetTextColor         = gdi32.NewProc("SetTextColor")
 	procSetBkColor           = gdi32.NewProc("SetBkColor")
@@ -388,6 +391,15 @@ func uiPaintButton(di *uiDrawItem, sc *settingsControls) bool {
 			color = uiRGB(255, 255, 255)
 		}
 	}
+	if di.ItemState&odsSelected != 0 && !isNav {
+		if id==ID_BUTTON_SAVE || id==ID_BUTTON_REFRESH {
+			brush=u.navActive
+			pen=u.navPen
+		} else {
+			brush=u.accentSoft
+			pen=u.borderPen
+		}
+	}
 	// Draw into the control's client rect; it is already DPI-scaled.
 	shape := uiRect{di.Rect.Left + uiS(2), di.Rect.Top + uiS(2), di.Rect.Right - uiS(2), di.Rect.Bottom - uiS(2)}
 	uiRound(di.HDC, shape, brush, pen, 12)
@@ -398,6 +410,10 @@ func uiPaintButton(di *uiDrawItem, sc *settingsControls) bool {
 		color = uiRGB(147, 160, 179)
 	}
 	uiDrawText(di.HDC, title, di.Rect, color, u.font, dtCenter)
+	if di.ItemState&odsFocus != 0 {
+		focus:=uiRect{di.Rect.Left+uiS(8),di.Rect.Top+uiS(7),di.Rect.Right-uiS(8),di.Rect.Bottom-uiS(7)}
+		procDrawFocusRect.Call(di.HDC,uintptr(unsafe.Pointer(&focus)))
+	}
 	return true
 }
 
