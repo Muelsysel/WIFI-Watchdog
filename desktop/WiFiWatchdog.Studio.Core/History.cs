@@ -32,8 +32,8 @@ public static class LogHistory
         var count = (int)Math.Min(fs.Length, Math.Max(1024, maxBytes));
         fs.Seek(-count, SeekOrigin.End);
         var data = new byte[count];
-        var n = fs.Read(data, 0, count);
-        var lines = Encoding.UTF8.GetString(data, 0, n).Split('\n');
+        fs.ReadExactly(data);
+        var lines = Encoding.UTF8.GetString(data).Split('\n');
         // The first line may be truncated if we started in the middle.
         var begin = fs.Length > count ? 1 : 0;
         return lines.Skip(begin).Select(x => ParseLine(x.TrimEnd('\r')))
