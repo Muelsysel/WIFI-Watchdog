@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-var appVersion = "1.4.1"
+var appVersion = "1.5.0-rc.1"
 
 type RecoveryTarget struct {
 	ProfileName          string    `json:"profileName"`
@@ -205,9 +205,8 @@ func sameNetworkIdentity(current wifiInfo, remembered RecoveryTarget) bool {
 	if current.SSID != "" && remembered.SSID != "" {
 		return current.SSID == remembered.SSID
 	}
-	if current.InterfaceGUID != "" && remembered.InterfaceGUID != "" {
-		return strings.EqualFold(strings.Trim(current.InterfaceGUID, "{}"), strings.Trim(remembered.InterfaceGUID, "{}"))
-	}
+	// The same physical adapter may roam to a different network. GUID equality
+	// alone is not proof of the SSID/Profile: never borrow a stale saved profile.
 	return false
 }
 
@@ -215,9 +214,13 @@ func (a *App) resolveTarget(current wifiInfo) RecoveryTarget {
 	remembered := a.loadRememberedTarget()
 	base := targetFromInfo(current)
 	if !current.Connected {
-		// If disconnected, keep current interface identity but use the last known
-		// successful Profile/SSID. This is the key fallback when auto-connect fails.
-		return mergeTarget(base, remembered)
+		// Use a remembered profile only on the same adapter. A missing/changed
+		// GUID is ambiguous: never switch a different WLAN interface by accident.
+		if current.InterfaceGUID != "" && remembered.InterfaceGUID != "" &&
+			strings.EqualFold(strings.Trim(current.InterfaceGUID, "{}"), strings.Trim(remembered.InterfaceGUID, "{}")) {
+			return mergeTarget(base, remembered)
+		}
+		return base
 	}
 
 	// When connected to a different network, never borrow the old Profile just
@@ -239,7 +242,8 @@ func targetMatches(i wifiInfo, t RecoveryTarget) bool {
 	if t.SSID != "" && i.SSID != "" {
 		return i.SSID == t.SSID
 	}
-	return i.Connected
+	// Do not treat association to an arbitrary AP as confirmation of the target.
+	return false
 }
 
 func (a *App) waitForAssociation(t RecoveryTarget, timeout time.Duration) bool {
@@ -465,7 +469,10 @@ func (a *App) setAdapterEnabledPowerShell(t RecoveryTarget, enabled bool) error 
 	if len(clauses) == 0 {
 		return fmt.Errorf("no adapter identity available")
 	}
-	selector := strings.Join(clauses, " -or ")
+	// If a stable interface GUID is known, never allow a stale alias or
+	// description to select a different adapter (especially dangerous on disable).
+	// For legacy saved targets without GUID, prefer description over alias.
+	selector := clauses[0]
 	script := "$ErrorActionPreference='Stop'; $a=Get-NetAdapter | Where-Object { " + selector + " } | Select-Object -First 1; if(-not $a){throw 'Wi-Fi adapter not found'}; " + action
 	out, err := powershellEncoded(script, 30*time.Second)
 	if err != nil {
@@ -690,9 +697,10 @@ func (a *App) cleanupOldDiagnostics(now time.Time) {
 	if retention <= 0 {
 		retention = 30
 	}
-	cutoff := now.AddDate(0, 0, -retention)
+	cutoff := now.AddDate(0, 0, -(retention - 1))
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "diagnostics-") || !strings.HasSuffix(entry.Name(), ".txt") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") ||
+			(!strings.HasPrefix(entry.Name(), "diagnostics-") && !strings.HasPrefix(entry.Name(), "crash-") && !strings.HasPrefix(entry.Name(), "hang-")) {
 			continue
 		}
 		info, err := entry.Info()
