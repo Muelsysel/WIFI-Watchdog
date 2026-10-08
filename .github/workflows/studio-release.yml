@@ -10,7 +10,7 @@ on:
       version:
         description: "Studio version (e.g. 0.2.0-preview.1); tag is studio-vVERSION"
         required: true
-        default: "0.1.0-preview"
+        default: "0.2.0-preview"
 
 permissions:
   contents: write
