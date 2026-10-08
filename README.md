@@ -6,6 +6,17 @@
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
+## 两种产品版本（Portable + Studio）
+
+本项目现在维护**两个互不取代的 Windows 版本**：
+
+- **Portable 便携版**：原有 Go/Win32 托盘程序，体积小、适合后台长期自动检测及恢复；原有下载和配置不受影响。
+- **Studio 桌面版（Preview）**：独立 WPF/.NET 8 原生 Windows 11 控制台，包含美观的工作台、网络诊断、历史趋势、日志检索、配置方案、脱敏导出与便携引擎管理。它仅在打开时消耗桌面 UI 内存，关闭后便携引擎继续运行。
+
+[详细功能、独立构建与安全说明](desktop/README.md)。
+
+> Studio Preview 是实际可以运行的功能性预览版，**不是已经完成代码签名、企业部署、安全审计和长时间实机验证的正式商用产品**。两个版本使用同一份引擎数据与配置，Studio 修改配置后需要正常重启便携引擎才能生效。
+
 ## 为什么做这个项目
 
 Windows 有时会出现“Wi‑Fi 显示已连接，但实际无法访问互联网”的状态。常见原因包括 AP 漫游、DHCP 租约、校园网认证、无线驱动、WLAN Profile、VPN/TUN 路由、DNS 或系统网络栈异常。
