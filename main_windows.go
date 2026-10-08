@@ -72,6 +72,7 @@ const (
 	WS_CHILD      = 0x40000000
 	WS_TABSTOP    = 0x00010000
 	WS_BORDER     = 0x00800000
+	WS_CLIPCHILDREN = 0x02000000
 
 	ES_NUMBER        = 0x2000
 	BS_PUSHBUTTON    = 0x00000000
@@ -1424,7 +1425,7 @@ func (a *App) runSettingsThread() {
 		0,
 		uintptr(unsafe.Pointer(wstr("WiFiWatchdog.Settings"))),
 		uintptr(unsafe.Pointer(wstr("WiFi Watchdog 控制中心 v"+appVersion))),
-		uintptr(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU),
+		uintptr(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN),
 		uintptr(x), uintptr(y), uintptr(width), uintptr(height),
 		0, 0, hInstance, 0,
 	)
