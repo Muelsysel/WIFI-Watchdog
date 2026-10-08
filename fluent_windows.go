@@ -75,7 +75,7 @@ type processMemoryCountersEx struct {
 }
 type fluentAssets struct {
 	dpi                                                                                 float64
-	background, sidebar, white, navActive, accent, accentSoft, border, pale, mutedBrush uintptr
+	background, sidebar, white, navActive, accent, accentSoft uintptr
 	borderPen, navPen, clearPen, accentPen, sidebarPen                                 uintptr
 	font, heading, title                                                                uintptr
 }
@@ -139,9 +139,6 @@ func uiInit() {
 		u.navActive = brush(35, 57, 93)
 		u.accent = brush(35, 105, 235)
 		u.accentSoft = brush(230, 239, 255)
-		u.border = brush(226, 232, 242)
-		u.pale = brush(248, 250, 254)
-		u.mutedBrush = brush(238, 242, 248)
 		u.borderPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(226, 232, 242))
 		u.navPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(35, 57, 93))
 		u.clearPen, _, _ = procCreatePen.Call(psSolid, 1, uiRGB(245, 247, 252))
