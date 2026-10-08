@@ -74,10 +74,10 @@ type processMemoryCountersEx struct {
 	PrivateBytes     uintptr
 }
 type fluentAssets struct {
-	dpi                                                                                 float64
+	dpi                                                       float64
 	background, sidebar, white, navActive, accent, accentSoft uintptr
-	borderPen, navPen, clearPen, accentPen, sidebarPen                                 uintptr
-	font, heading, title                                                                uintptr
+	borderPen, navPen, clearPen, accentPen, sidebarPen        uintptr
+	font, heading, title                                      uintptr
 }
 
 var fluent struct {
@@ -103,7 +103,7 @@ var (
 	procRoundRect            = gdi32.NewProc("RoundRect")
 	procCreateFontW          = gdi32.NewProc("CreateFontW")
 	procGetCurrentProcess    = kernel32.NewProc("GetCurrentProcess")
-	procReadProcessMemory = kernel32.NewProc("ReadProcessMemory")
+	procReadProcessMemory    = kernel32.NewProc("ReadProcessMemory")
 	psapi                    = syscall.NewLazyDLL("psapi.dll")
 	procGetProcessMemoryInfo = psapi.NewProc("GetProcessMemoryInfo")
 )
@@ -389,12 +389,12 @@ func uiPaintButton(di *uiDrawItem, sc *settingsControls) bool {
 		}
 	}
 	if di.ItemState&odsSelected != 0 && !isNav {
-		if id==ID_BUTTON_SAVE || id==ID_BUTTON_REFRESH {
-			brush=u.navActive
-			pen=u.navPen
+		if id == ID_BUTTON_SAVE || id == ID_BUTTON_REFRESH {
+			brush = u.navActive
+			pen = u.navPen
 		} else {
-			brush=u.accentSoft
-			pen=u.borderPen
+			brush = u.accentSoft
+			pen = u.borderPen
 		}
 	}
 	// Draw into the control's client rect; it is already DPI-scaled.
@@ -408,8 +408,8 @@ func uiPaintButton(di *uiDrawItem, sc *settingsControls) bool {
 	}
 	uiDrawText(di.HDC, title, di.Rect, color, u.font, dtCenter)
 	if di.ItemState&odsFocus != 0 {
-		focus:=uiRect{di.Rect.Left+uiS(8),di.Rect.Top+uiS(7),di.Rect.Right-uiS(8),di.Rect.Bottom-uiS(7)}
-		procDrawFocusRect.Call(di.HDC,uintptr(unsafe.Pointer(&focus)))
+		focus := uiRect{di.Rect.Left + uiS(8), di.Rect.Top + uiS(7), di.Rect.Right - uiS(8), di.Rect.Bottom - uiS(7)}
+		procDrawFocusRect.Call(di.HDC, uintptr(unsafe.Pointer(&focus)))
 	}
 	return true
 }
