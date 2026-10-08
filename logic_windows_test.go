@@ -287,3 +287,32 @@ func TestDiagnosticCleanupIncludesHangAndCrash(t *testing.T) {
 		t.Fatalf("old diagnostics remain: %v", entries)
 	}
 }
+
+func TestCooldownStillAppliesWhenStateWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	invalidDataDir := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(invalidDataDir, []byte("blocked"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{dataDir: invalidDataDir, logger: newLogger(filepath.Join(dir, "logs"), 30)}
+	a.recordAutoRepairAttempt()
+	remaining := a.remainingAutoRepairCooldown(10 * time.Minute)
+	if remaining <= 9*time.Minute || remaining > 10*time.Minute {
+		t.Fatalf("in-memory cooldown not retained after disk error: %v", remaining)
+	}
+}
+
+func TestFutureDatedCooldownNeverExceedsConfiguredInterval(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{dataDir: dir, logger: newLogger(filepath.Join(dir, "logs"), 30)}
+	err := a.updatePersistentState(func(st *PersistentState) {
+		st.LastAutoRepairAt = time.Now().Add(24 * time.Hour)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := a.remainingAutoRepairCooldown(10 * time.Minute)
+	if remaining > 10*time.Minute || remaining < 9*time.Minute {
+		t.Fatalf("clock jump changed cooldown unexpectedly: %v", remaining)
+	}
+}
