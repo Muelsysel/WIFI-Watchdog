@@ -175,15 +175,31 @@ func (a *App) recordInternetOK() {
 }
 
 func (a *App) recordAutoRepairAttempt() {
-	_ = a.updatePersistentState(func(st *PersistentState) { st.LastAutoRepairAt = time.Now() })
+	now := time.Now()
+	a.lastAutoRepairAt.Store(now.UnixNano())
+	if err := a.updatePersistentState(func(st *PersistentState) { st.LastAutoRepairAt = now }); err != nil {
+		a.logger.warn("恢复冷却状态写盘失败；本次进程仍将遵守内存冷却："+err.Error())
+	}
 }
 
 func (a *App) remainingAutoRepairCooldown(interval time.Duration) time.Duration {
 	st := a.loadPersistentState()
-	if st.LastAutoRepairAt.IsZero() {
+	last := st.LastAutoRepairAt
+	if unixNano := a.lastAutoRepairAt.Load(); unixNano > 0 {
+		inMemory := time.Unix(0, unixNano)
+		if inMemory.After(last) {
+			last = inMemory
+		}
+	}
+	if last.IsZero() {
 		return 0
 	}
-	remaining := interval - time.Since(st.LastAutoRepairAt)
+	elapsed := time.Since(last)
+	if elapsed < 0 {
+		// Clock corrections must not cause multi-day cooldowns.
+		elapsed = 0
+	}
+	remaining := interval - elapsed
 	if remaining < 0 {
 		return 0
 	}
