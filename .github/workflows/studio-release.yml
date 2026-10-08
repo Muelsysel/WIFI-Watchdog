@@ -36,7 +36,7 @@ jobs:
         env:
           REQUEST_VERSION: ${{ inputs.version }}
         run: |
-          $version = if ($env:REQUEST_VERSION) { $env:REQUEST_VERSION } else { '0.1.0-preview' }
+          $version = if ($env:REQUEST_VERSION) { $env:REQUEST_VERSION } else { '0.2.0-preview' }
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-[a-zA-Z0-9][a-zA-Z0-9.-]*)?$') {
             throw "Invalid Studio release version: $version"
           }
