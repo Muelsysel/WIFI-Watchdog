@@ -16,17 +16,35 @@ namespace WiFiWatchdog.Studio;
 public sealed record ChartBar(string Label, int Count, double Height, Brush BarBrush);
 public sealed record EndpointRow(string Name, string Verdict, string StatusText, string TimeText, string Detail);
 public sealed record EventRow(string TimestampText, string Level, string Message, WatchdogEvent Source);
+public sealed record AdapterRow(AdapterSnapshot Snapshot)
+{
+    public string Name => Snapshot.Name;
+    public string Kind => Snapshot.Kind;
+    public string Status => Snapshot.Status;
+    public string Speed => Snapshot.Speed;
+    public string Hint => Snapshot.MightBeVirtual ? "疑似虚拟" : "—";
+}
+public sealed record DiagnosticHistoryRow(DiagnosticRecord Snapshot)
+{
+    public string When => Snapshot.Created.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+    public string Fraction => $"{Snapshot.Passed}/{Snapshot.Total}";
+    public string Proxy => Snapshot.MixedProxyValid switch { true => "通过", false => "未通过", _ => "未知" };
+    public string Conclusion => Snapshot.Conclusion;
+}
 
 public partial class MainWindow : Window
 {
     private readonly ConfigStore configStore = new(AppPaths.Config);
     private readonly PresetStore presetStore = new(AppPaths.Presets);
+    private readonly DiagnosticJournal journal = new(Path.Combine(AppPaths.Studio, "diagnostic-history"));
     private readonly DispatcherTimer uiTimer;
     private IReadOnlyList<WatchdogEvent> events = [];
     private DiagnosticSnapshot? lastDiagnostic;
     private CancellationTokenSource? diagnosticCancellation;
     private readonly Dictionary<TextBox, (string key, int lo, int hi)> numericFields = new();
     private JsonObject loadedConfig = ConfigStore.Defaults();
+    private string loadedFingerprint = "missing";
+    private IReadOnlyList<AdapterSnapshot> adapters = [];
     private string enginePath = "";
     private bool refreshing;
     public ObservableCollection<ChartBar> ChartBars { get; } = new();
@@ -39,11 +57,16 @@ public partial class MainWindow : Window
         LoadPreferences();
         PopulateConfig();
         RefreshPresetNames();
+        RefreshDiagnosticHistory();
         Navigate("OverviewPage");
         uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         uiTimer.Tick += async (_, _) => await RefreshAllAsync();
         uiTimer.Start();
-        Loaded += async (_, _) => await RefreshAllAsync();
+        Loaded += async (_, _) =>
+        {
+            await RefreshAllAsync();
+            await RefreshAdaptersAsync();
+        };
         Closing += (_, _) =>
         {
             uiTimer.Stop();
@@ -75,7 +98,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            loadedConfig = config ?? configStore.Read();
+            if (config is null)
+            {
+                loadedConfig = configStore.Read();
+                loadedFingerprint = configStore.Fingerprint();
+            }
+            else loadedConfig = config;
             var defaults = ConfigStore.Defaults();
             foreach (var (box, field) in numericFields)
             {
@@ -120,23 +148,27 @@ public partial class MainWindow : Window
         var views = new Dictionary<string, StackPanel>
         {
             ["OverviewPage"] = OverviewPage, ["DiagnosticsPage"] = DiagnosticsPage,
-            ["HistoryPage"] = HistoryPage, ["SettingsPage"] = SettingsPage, ["AboutPage"] = AboutPage
+            ["AdaptersPage"] = AdaptersPage, ["HistoryPage"] = HistoryPage,
+            ["SettingsPage"] = SettingsPage, ["AboutPage"] = AboutPage
         };
         var titles = new Dictionary<string, (string title, string hint)>
         {
             ["OverviewPage"] = ("网络概览", "掌握当前网络健康和恢复引擎状态"),
             ["DiagnosticsPage"] = ("智能诊断", "完整的 HTTP、Mihomo 和混合代理检测"),
+            ["AdaptersPage"] = ("网络适配器", "Wi-Fi / 虚拟网卡 / DNS / IP 路由快照"),
             ["HistoryPage"] = ("历史事件", "分析异常、恢复次数与运行趋势"),
             ["SettingsPage"] = ("监控策略", "安全配置恢复引擎并管理多套方案"),
             ["AboutPage"] = ("产品与引擎", "查看权限边界、路径与发布信息")
         };
         foreach (var pair in views) pair.Value.Visibility = pair.Key == pageName ? Visibility.Visible : Visibility.Collapsed;
-        var navs = new[] { NavOverview, NavDiagnostics, NavHistory, NavSettings, NavAbout };
+        var navs = new[] { NavOverview, NavDiagnostics, NavAdapters, NavHistory, NavSettings, NavAbout };
         foreach (var nav in navs)
             nav.Background = (string?)nav.Tag == pageName
                 ? new SolidColorBrush(Color.FromRgb(43, 67, 110)) : Brushes.Transparent;
         PageHeadline.Text = titles[pageName].title;
         PageHint.Text = titles[pageName].hint;
+        if (pageName == "AdaptersPage" && adapters.Count == 0)
+            _ = RefreshAdaptersAsync();
     }
 
     private void Navigate_Click(object sender, RoutedEventArgs e)
@@ -232,7 +264,20 @@ public partial class MainWindow : Window
             EndpointList.ItemsSource = lastDiagnostic.Endpoints.Select(x =>
                 new EndpointRow(x.Name, x.Valid ? "通过" : "未通过", x.Status?.ToString() ?? "—",
                     x.Milliseconds + " ms", x.Detail)).ToArray();
-            Status($"诊断完成：四个端点通过 {lastDiagnostic.Passed} 个；不自动执行修复");
+            try
+            {
+                journal.Add(lastDiagnostic);
+                RefreshDiagnosticHistory();
+            }
+            catch (Exception ex)
+            {
+                Status("检测成功，但保存本机诊断历史失败：" + ex.Message);
+            }
+            var latestAdapters = adapters;
+            if (latestAdapters.Count == 0)
+                latestAdapters = await Task.Run(AdapterInspector.Collect);
+            RecommendationsList.ItemsSource = HealthAdvisor.Evaluate(lastDiagnostic, latestAdapters);
+            Status($"诊断完成：四个端点通过 {lastDiagnostic.Passed} 个；只读检测，未修改网络");
         }
         catch (OperationCanceledException) { Status("用户已取消诊断"); }
         catch (Exception ex) { Status("诊断异常：" + ex.Message); DiagnosticSummary.Text = "诊断未完成：" + ex.Message; }
@@ -272,13 +317,21 @@ public partial class MainWindow : Window
         try
         {
             var updated = CaptureConfig();
-            configStore.Save(updated);
+            loadedFingerprint = configStore.SaveIfUnchanged(updated, loadedFingerprint);
             loadedConfig = updated;
             Status("配置已安全保存，并备份上一版本为 config.json.bak");
             MessageBox.Show(this, EngineIsRunning()
                 ? "已写入 config.json。当前便携引擎仍使用旧的内存配置；请从托盘正常退出并重新启动，才能应用新参数。"
                 : "配置已保存。下次启动便携引擎时自动生效。", "保存成功",
                 MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (ConfigConflictException ex)
+        {
+            Status(ex.Message);
+            var choice = MessageBox.Show(this,
+                "配置文件在 Studio 打开后已被其他程序修改，为避免覆盖更改，保存已取消。\n\n现在重新加载磁盘配置吗？未保存的页面编辑会丢失。",
+                "检测到配置冲突", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (choice == MessageBoxResult.Yes) PopulateConfig();
         }
         catch (Exception ex) { Error("保存配置失败", ex); }
     }
@@ -315,6 +368,52 @@ public partial class MainWindow : Window
             MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         try { presetStore.Remove(name); RefreshPresetNames(); Status("已删除方案：" + name); }
         catch (Exception ex) { Error("删除方案失败", ex); }
+    }
+
+
+    private async Task RefreshAdaptersAsync()
+    {
+        AdapterSummary.Text = "正在安全读取网络接口…";
+        try
+        {
+            adapters = await Task.Run(AdapterInspector.Collect);
+            AdapterList.ItemsSource = adapters.Select(x => new AdapterRow(x)).ToArray();
+            AdapterSummary.Text = $"发现 {adapters.Count} 个非环回接口；连接中 {adapters.Count(x => x.IsUp)} 个。";
+            if (adapters.Count > 0) AdapterList.SelectedIndex = 0;
+            if (lastDiagnostic is not null)
+                RecommendationsList.ItemsSource = HealthAdvisor.Evaluate(lastDiagnostic, adapters);
+        }
+        catch (Exception ex) { Status("读取网络接口失败：" + ex.Message); AdapterSummary.Text = "网络接口无法读取"; }
+    }
+    private void RefreshAdapters_Click(object sender, RoutedEventArgs e) => _ = RefreshAdaptersAsync();
+
+    private void AdapterSelection_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (AdapterList.SelectedItem is not AdapterRow row) return;
+        var v = row.Snapshot;
+        AdapterDetailName.Text = v.Name + " · " + v.Kind + " · " + v.Status;
+        AdapterIPv4.Text = string.IsNullOrWhiteSpace(v.IPv4) ? "未分配" : v.IPv4;
+        AdapterIPv6.Text = string.IsNullOrWhiteSpace(v.IPv6) ? "未分配" : v.IPv6;
+        AdapterGateway.Text = string.IsNullOrWhiteSpace(v.Gateway) ? "无/不可用" : v.Gateway;
+        AdapterDNS.Text = string.IsNullOrWhiteSpace(v.Dns) ? "未设置/不可用" : v.Dns;
+    }
+
+    private void RefreshDiagnosticHistory()
+    {
+        try
+        {
+            DiagnosticHistoryList.ItemsSource = journal.Read().Select(x => new DiagnosticHistoryRow(x)).ToArray();
+        }
+        catch (Exception ex) { Status("读取诊断历史失败：" + ex.Message); }
+    }
+    private void RefreshDiagnosticHistory_Click(object sender, RoutedEventArgs e) => RefreshDiagnosticHistory();
+    private void DiagnosticHistorySelection_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (DiagnosticHistoryList.SelectedItem is not DiagnosticHistoryRow row) return;
+        var d = row.Snapshot;
+        var results = string.Join("，", d.Endpoints.Select(p =>
+            $"{p.Name}：{(p.Passed ? "通过" : "未通过")} ({(p.HttpCode?.ToString() ?? "无HTTP码")}, {p.DurationMs}ms)"));
+        HistoryDiagnosisDetail.Text = $"{d.Created.ToLocalTime():yyyy-MM-dd HH:mm} · {d.Conclusion}\n{results}";
     }
 
     private static bool EngineIsRunning()
