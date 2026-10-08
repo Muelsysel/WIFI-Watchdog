@@ -65,13 +65,13 @@ const (
 	TPM_RIGHTBUTTON = 0x0002
 	TPM_RETURNCMD   = 0x0100
 
-	WS_OVERLAPPED = 0x00000000
-	WS_CAPTION    = 0x00C00000
-	WS_SYSMENU    = 0x00080000
-	WS_VISIBLE    = 0x10000000
-	WS_CHILD      = 0x40000000
-	WS_TABSTOP    = 0x00010000
-	WS_BORDER     = 0x00800000
+	WS_OVERLAPPED   = 0x00000000
+	WS_CAPTION      = 0x00C00000
+	WS_SYSMENU      = 0x00080000
+	WS_VISIBLE      = 0x10000000
+	WS_CHILD        = 0x40000000
+	WS_TABSTOP      = 0x00010000
+	WS_BORDER       = 0x00800000
 	WS_CLIPCHILDREN = 0x02000000
 
 	ES_NUMBER        = 0x2000
@@ -577,7 +577,9 @@ func (a *App) setStatus(state MonitorState, text string, logIt bool) {
 	a.settingsMu.Lock()
 	settings := a.settingsHwnd
 	a.settingsMu.Unlock()
-	if settings != 0 { procPostMessageW.Call(settings, WM_SETTINGS_LIVE_STATUS, 0, 0) }
+	if settings != 0 {
+		procPostMessageW.Call(settings, WM_SETTINGS_LIVE_STATUS, 0, 0)
+	}
 }
 
 func (a *App) currentStatus() (MonitorState, string) {
@@ -1438,7 +1440,7 @@ func (a *App) runSettingsThread() {
 	sc := &settingsControls{hwnd: hwnd, edits: map[int]uintptr{}}
 	settingsMap.Store(hwnd, sc)
 
-	buildFluentSettings(sc,c,a)
+	buildFluentSettings(sc, c, a)
 
 	a.settingsMu.Lock()
 	a.settingsHwnd = hwnd
@@ -1841,7 +1843,9 @@ func (a *App) restoreSettingsDefaults(hwnd uintptr) {
 }
 
 func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
-	if handled,result:=uiHandleSettingsMessage(hwnd,message,wParam,lParam);handled {return result}
+	if handled, result := uiHandleSettingsMessage(hwnd, message, wParam, lParam); handled {
+		return result
+	}
 	switch message {
 	case WM_COMMAND:
 		id := int(loword(wParam))
@@ -1901,16 +1905,18 @@ func settingsWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintp
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case WM_SETTINGS_ACTIVATE:
-		if v,ok:=settingsMap.Load(hwnd);ok { uiUpdateMemory(v.(*settingsControls)) }
+		if v, ok := settingsMap.Load(hwnd); ok {
+			uiUpdateMemory(v.(*settingsControls))
+		}
 		procShowWindow.Call(hwnd, SW_SHOW)
 		procSetForegroundWindow.Call(hwnd)
 		return 0
 	case WM_SETTINGS_LIVE_STATUS:
-		if app!=nil {
-			if v,ok:=settingsMap.Load(hwnd);ok {
-				sc:=v.(*settingsControls)
-				state,text:=app.currentStatus()
-				if sc.page==modernPageOverview {
+		if app != nil {
+			if v, ok := settingsMap.Load(hwnd); ok {
+				sc := v.(*settingsControls)
+				state, text := app.currentStatus()
+				if sc.page == modernPageOverview {
 					setControlText(sc.summarySystem, fmt.Sprintf("后台监控 [%d]：%s", state, text))
 				}
 			}
@@ -2107,8 +2113,12 @@ func main() {
 	// A lower steady-state Go heap reduces idle memory without embedding a
 	// browser UI. The memory limit is a soft GC target, NOT an RSS limit.
 	// Environment-provided GOGC/GOMEMLIMIT remain authoritative.
-	if os.Getenv("GOGC")=="" { debug.SetGCPercent(70) }
-	if os.Getenv("GOMEMLIMIT")=="" { debug.SetMemoryLimit(96<<20) }
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(70)
+	}
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(96 << 20)
+	}
 
 	// Win32 windows and message queues are OS-thread-affine. Keep all UI creation
 	// and the message pump on one dedicated OS thread; goroutines must communicate
