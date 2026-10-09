@@ -10,7 +10,7 @@ on:
       version:
         description: "Studio version (e.g. 0.2.0-preview.1); tag is studio-vVERSION"
         required: true
-        default: "0.2.0-preview"
+        default: "0.3.0-preview"
 
 permissions:
   contents: write
@@ -36,7 +36,7 @@ jobs:
         env:
           REQUEST_VERSION: ${{ inputs.version }}
         run: |
-          $version = if ($env:REQUEST_VERSION) { $env:REQUEST_VERSION } else { '0.2.0-preview' }
+          $version = if ($env:REQUEST_VERSION) { $env:REQUEST_VERSION } else { '0.3.0-preview' }
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-[a-zA-Z0-9][a-zA-Z0-9.-]*)?$') {
             throw "Invalid Studio release version: $version"
           }
@@ -73,6 +73,20 @@ jobs:
           $hash = (Get-FileHash dist/WiFiWatchdog-Studio-windows-amd64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  WiFiWatchdog-Studio-windows-amd64.zip" | Set-Content -Encoding utf8 dist/SHA256SUMS.txt
 
+      - name: Build installable Studio setup
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress --limit-output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $compiler = "${env:ProgramFiles(x86)}\\NSIS\\makensis.exe"
+          if (!(Test-Path $compiler)) { throw 'NSIS compiler missing' }
+          $source = (Resolve-Path dist/Studio).Path
+          $output = Join-Path (Resolve-Path dist).Path 'WiFiWatchdog-Studio-Setup-x64.exe'
+          & $compiler "/DSTUDIO_SOURCE=$source" "/DSTUDIO_OUTPUT=$output" "/DSTUDIO_VERSION=0.3.0-preview" desktop/installer/studio.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installerHash = (Get-FileHash $output -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$installerHash  WiFiWatchdog-Studio-Setup-x64.exe" | Add-Content -Encoding utf8 dist/SHA256SUMS.txt
+
       - name: Create Studio prerelease
         shell: pwsh
         env:
@@ -88,5 +102,5 @@ jobs:
           git tag -a $env:TAG HEAD -m "WiFi Watchdog Studio $env:TAG"
           git push origin $env:TAG
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release create $env:TAG dist/WiFiWatchdog-Studio-windows-amd64.zip dist/SHA256SUMS.txt --prerelease --title "WiFi Watchdog Studio $env:TAG (Preview)" --notes "Independent Windows 11 WPF Studio companion to the unchanged Go portable edition. Includes local network diagnostics, event analytics, recovery profiles, Mihomo/TUN checks, sanitized exports and optional privileged Go engine launch. Preview: real Windows 11 acceptance testing, signing, installer, updater and enterprise security review remain pending."
+          gh release create $env:TAG dist/WiFiWatchdog-Studio-windows-amd64.zip dist/WiFiWatchdog-Studio-Setup-x64.exe dist/SHA256SUMS.txt --prerelease --title "WiFi Watchdog Studio $env:TAG (Preview)" --notes "Independent Windows 11 WPF Studio companion to the unchanged Go portable edition. Includes local network diagnostics, event analytics, recovery profiles, Mihomo/TUN checks, sanitized exports and optional privileged Go engine launch. Preview: real Windows 11 acceptance testing, signing, code signing, automatic application, enterprise security review and Windows 11 on-device validation remain pending."
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
