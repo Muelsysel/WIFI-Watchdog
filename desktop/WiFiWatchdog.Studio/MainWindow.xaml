@@ -31,6 +31,7 @@
                     <Button x:Name="NavAdapters" Style="{StaticResource NavButton}" Tag="AdaptersPage" Click="Navigate_Click" Content="≋   网络适配器"/>
                     <Button x:Name="NavHistory" Style="{StaticResource NavButton}" Tag="HistoryPage" Click="Navigate_Click" Content="▤   历史事件"/>
                     <Button x:Name="NavSettings" Style="{StaticResource NavButton}" Tag="SettingsPage" Click="Navigate_Click" Content="⚙   监控策略"/>
+                    <Button x:Name="NavMaintenance" Style="{StaticResource NavButton}" Tag="MaintenancePage" Click="Navigate_Click" Content="⟳   更新与维护"/>
                     <Button x:Name="NavAbout" Style="{StaticResource NavButton}" Tag="AboutPage" Click="Navigate_Click" Content="ⓘ   关于软件"/>
                 </StackPanel>
             </DockPanel>
@@ -335,6 +336,44 @@
                         </Border>
                     </StackPanel>
 
+                    <StackPanel x:Name="MaintenancePage" Visibility="Collapsed">
+                        <TextBlock Text="更新与维护" Style="{StaticResource H1}"/>
+                        <TextBlock Text="安全地检查官方更新，管理本机安装和崩溃记录。便携版引擎仍独立运行。" Style="{StaticResource Meta}" Margin="0,7,0,24"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Studio 版本更新" Style="{StaticResource Section}"/>
+                                <TextBlock x:Name="InstalledStudioVersion" Text="当前版本：0.3.0-preview" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,11"/>
+                                <TextBlock x:Name="UpdateStatus" Text="尚未检查。更新只从本项目官方 GitHub Release 获取，不会自动执行安装程序。" Style="{StaticResource Meta}" Margin="0,0,0,17"/>
+                                <WrapPanel>
+                                    <Button x:Name="CheckUpdatesButton" Content="检查官方版本" Style="{StaticResource PrimaryButton}" Click="CheckUpdates_Click" Margin="0,0,12,8"/>
+                                    <Button x:Name="OpenReleaseButton" Content="打开官方更新页面" Click="OpenLatestRelease_Click" IsEnabled="False" Margin="0,0,12,8"/>
+                                    <Button Content="查看所有版本" Click="OpenAllReleases_Click" Margin="0,0,12,8"/>
+                                </WrapPanel>
+                                <TextBlock x:Name="UpdateDigest" Text="SHA-256：尚未获取。" Style="{StaticResource Meta}" Margin="0,10,0,15"/>
+                                <CheckBox x:Name="AutoCheckUpdates" Content="打开 Studio 时自动检查新版（只请求 GitHub Release 信息）"
+                                          Margin="0,0,0,13"/>
+                                <Button Content="保存更新偏好" Click="SaveUpdatePreferences_Click" HorizontalAlignment="Left"/>
+                                <TextBlock Text="不会在后台静默下载、重启 Studio、切换代理或替换正在使用的恢复引擎。下载后请自己核对 SHA-256 并退出旧程序再安装。" Style="{StaticResource Meta}" Margin="0,14,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="安装与卸载" Style="{StaticResource Section}"/>
+                                <TextBlock Text="新版提供每用户安装程序（无需 UAC）。Studio 本体安装在本用户 LocalAppData 的 Programs 子目录，与恢复数据和其他便携引擎分离。" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <Button Content="打开 Windows 已安装应用" Click="OpenInstalledApps_Click" HorizontalAlignment="Left"/>
+                                <TextBlock Text="卸载只删除 Studio 的安装目录、开始菜单入口和卸载注册表项。日志、配置、预设、诊断历史不会被卸载程序删除。若使用 ZIP 版，仍可直接删除解压目录。" Style="{StaticResource Meta}" Margin="0,13,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="稳定性与隐私" Style="{StaticResource Section}"/>
+                                <TextBlock Text="未处理的 Studio 异常会在本机记录时间、组件及异常类型；不会记录堆栈、错误消息、SSID、地址或 Mihomo Secret。记录保留 14 天。" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                                <Button Content="打开本机异常记录目录" Click="OpenCrashFolder_Click" HorizontalAlignment="Left"/>
+                                <TextBlock Text="当前仍为 Preview。代码签名、自动安装升级和完整 Windows 11 多 DPI/辅助功能实机验收仍需完成。" Style="{StaticResource Meta}" Margin="0,14,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
                     <StackPanel x:Name="AboutPage" Visibility="Collapsed">
                         <TextBlock Text="关于 Studio" Style="{StaticResource H1}"/>
                         <TextBlock Text="多功能网络运维桌面控制台 · 与便携版并存" Style="{StaticResource Meta}" Margin="0,7,0,25"/>
@@ -363,7 +402,7 @@
                             <StackPanel>
                                 <TextBlock Text="隐私与发布说明" Style="{StaticResource Section}"/>
                                 <TextBlock Text="无遥测、无远端账号、无内置广告。Controller Secret 仅存在本次输入的内存中，不保存到配置、历史或导出报告。" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                <TextBlock Text="这是首个功能性 Preview 版本，尚未完成代码签名、安装器、无障碍/多 DPI 实机验收、安全渗透测试和长期稳定性认证，不应当直接当作正式商用版本部署。" Style="{StaticResource Meta}"/>
+                                <TextBlock Text="这是功能性 Preview 版本，现已提供每用户安装器与官方 Release 检查，但尚未完成代码签名、无障碍/多 DPI 实机验收、安全渗透测试和长期稳定性认证，不能称为正式商用发行版。" Style="{StaticResource Meta}"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>

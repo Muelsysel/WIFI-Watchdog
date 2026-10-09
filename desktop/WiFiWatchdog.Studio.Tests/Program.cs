@@ -129,6 +129,60 @@ try
     // This method must be safe on test runner hardware with no connected Wi-Fi.
     Check(AdapterInspector.Collect() is not null, "read-only adapter enumeration has no Wi-Fi dependency");
 
+    // No internet required: inject a mocked official GitHub Release payload.
+    var apiPayload = """
+        [
+          {"tag_name":"studio-v0.2.0-preview","draft":false,"prerelease":true,
+           "assets":[{"name":"WiFiWatchdog-Studio-windows-amd64.zip",
+                      "digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]},
+          {"tag_name":"studio-v0.3.1-preview","draft":false,"prerelease":true,
+           "html_url":"https://hostile.invalid/remote-installer.exe",
+           "assets":[{"name":"WiFiWatchdog-Studio-windows-amd64.zip",
+                      "digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]},
+          {"tag_name":"studio-v0.99.0-preview","draft":true,"assets":[
+             {"name":"WiFiWatchdog-Studio-windows-amd64.zip",
+              "digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]},
+          {"tag_name":"v99.0.0","draft":false,"assets":[]},
+          {"tag_name":"studio-v0.4.0-preview","draft":false,"assets":[
+             {"name":"WiFiWatchdog-Studio-windows-amd64.zip","digest":"not-a-digest"}]}
+        ]
+        """;
+    var update = StudioUpdates.SelectLatest(apiPayload, "0.3.0-preview");
+    Check(update is { Newer: true, Version: "0.3.1-preview" },
+        "choose newest valid signed-digest Studio prerelease, reject draft and malformed asset");
+    Check(update is not null && update.ReleaseUrl ==
+          "https://github.com/Muelsysel/WIFI-Watchdog/releases/tag/studio-v0.3.1-preview",
+        "ignore untrusted release HTML URLs; construct official GitHub destination");
+    Check(StudioUpdates.CompareVersions("0.3.0", "0.3.0-preview") > 0 &&
+          StudioUpdates.CompareVersions("0.3.0-preview", "0.2.9") > 0 &&
+          StudioUpdates.CompareVersions("0.2.0", "0.2.0") == 0,
+        "stable release and numeric version ordering");
+    Check(StudioUpdates.SelectLatest(apiPayload, "0.4.0")?.Newer == false,
+        "do not offer downgrade as a new version");
+    Check(StudioUpdates.SelectLatest("[]") is null, "empty release list is safe");
+    using (var apiClient = new HttpClient(new MockHandler(req =>
+    {
+        Check(req.RequestUri?.ToString() == StudioUpdates.ReleaseApi, "use pinned official GitHub releases endpoint");
+        return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(apiPayload, Encoding.UTF8, "application/json") };
+    })))
+    {
+        Check((await StudioUpdates.CheckAsync(apiClient))?.Newer == true,
+            "parse official release metadata through injected HTTP client");
+    }
+
+    var crashDirectory = Path.Combine(root, "crashes");
+    CrashJournal.Record(crashDirectory, "UI", new InvalidOperationException(
+        "SECRET=should-not-be-written SSID=Campus WLAN C:\\Users\\Personal"));
+    var crashLog = Directory.GetFiles(crashDirectory, "studio-*.log").Single();
+    var crashText = File.ReadAllText(crashLog);
+    Check(crashText.Contains("System.InvalidOperationException") && crashText.Contains(" | UI | "),
+        "crash log retains exception type and coarse area");
+    Check(!crashText.Contains("SECRET") && !crashText.Contains("SSID") &&
+          !crashText.Contains("Personal"), "crash journal omits raw messages and user paths");
+    Check(!CrashJournal.Render("bad/\\..", typeof(Exception), DateTimeOffset.UtcNow).Contains("bad/"),
+        "crash component labels cannot contain paths");
+
     using var fake = new HttpClient(new MockHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent)
     { Content = new StringContent(string.Empty, Encoding.UTF8) }));
     var four = await NetworkDiagnostics.TestAllAsync(fake,

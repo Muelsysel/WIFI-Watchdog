@@ -6,6 +6,10 @@
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
+## Studio v0.3 Preview：原生安装、官方更新检查和隐私化崩溃日志
+
+Studio 现在增加**每用户安装/卸载程序**（同时保留 ZIP）、自愿启用的 GitHub 官方版本检查、SHA-256 显示和仅本机记录的最小化崩溃摘要。Studio 仍然**默认普通权限运行**，不会自己替换或重启便携版引擎。详见 [Studio 使用说明](desktop/README.md)。
+
 ## Studio v0.2 Preview：网络适配器与智能诊断历史
 
 Studio 独立 WPF 桌面版现已增加**适配器与 DNS/IP 详情、45 天本地脱敏诊断历史、分层故障建议、配置修改冲突检测**，以及降低日志图表刷新内存分配的改进。Go 便携版和既有 v1.6.1 下载包仍保持不变。

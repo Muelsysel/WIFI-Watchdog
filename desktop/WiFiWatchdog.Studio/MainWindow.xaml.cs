@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -46,6 +47,8 @@ public partial class MainWindow : Window
     private string loadedFingerprint = "missing";
     private IReadOnlyList<AdapterSnapshot> adapters = [];
     private string enginePath = "";
+    private StudioUpdate? latestStudioRelease;
+    private bool checkingUpdates;
     private bool refreshing;
     public ObservableCollection<ChartBar> ChartBars { get; } = new();
 
@@ -66,6 +69,7 @@ public partial class MainWindow : Window
         {
             await RefreshAllAsync();
             await RefreshAdaptersAsync();
+            if (AutoCheckUpdates.IsChecked == true) await CheckStudioUpdatesAsync();
         };
         Closing += (_, _) =>
         {
@@ -149,7 +153,7 @@ public partial class MainWindow : Window
         {
             ["OverviewPage"] = OverviewPage, ["DiagnosticsPage"] = DiagnosticsPage,
             ["AdaptersPage"] = AdaptersPage, ["HistoryPage"] = HistoryPage,
-            ["SettingsPage"] = SettingsPage, ["AboutPage"] = AboutPage
+            ["SettingsPage"] = SettingsPage, ["MaintenancePage"] = MaintenancePage, ["AboutPage"] = AboutPage
         };
         var titles = new Dictionary<string, (string title, string hint)>
         {
@@ -158,10 +162,11 @@ public partial class MainWindow : Window
             ["AdaptersPage"] = ("网络适配器", "Wi-Fi / 虚拟网卡 / DNS / IP 路由快照"),
             ["HistoryPage"] = ("历史事件", "分析异常、恢复次数与运行趋势"),
             ["SettingsPage"] = ("监控策略", "安全配置恢复引擎并管理多套方案"),
+            ["MaintenancePage"] = ("更新与维护", "官方版本检查、安装管理与本机异常记录"),
             ["AboutPage"] = ("产品与引擎", "查看权限边界、路径与发布信息")
         };
         foreach (var pair in views) pair.Value.Visibility = pair.Key == pageName ? Visibility.Visible : Visibility.Collapsed;
-        var navs = new[] { NavOverview, NavDiagnostics, NavAdapters, NavHistory, NavSettings, NavAbout };
+        var navs = new[] { NavOverview, NavDiagnostics, NavAdapters, NavHistory, NavSettings, NavMaintenance, NavAbout };
         foreach (var nav in navs)
             nav.Background = (string?)nav.Tag == pageName
                 ? new SolidColorBrush(Color.FromRgb(43, 67, 110)) : Brushes.Transparent;
@@ -439,6 +444,9 @@ public partial class MainWindow : Window
                 if (doc.RootElement.TryGetProperty("enginePath", out var value) &&
                     value.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(value.GetString()))
                     enginePath = value.GetString()!;
+                if (doc.RootElement.TryGetProperty("checkUpdatesAutomatically", out var enabled) &&
+                    enabled.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    AutoCheckUpdates.IsChecked = enabled.GetBoolean();
             }
         }
         catch (Exception ex) { Status("读取 Studio 偏好设置失败：" + ex.Message); }
@@ -451,12 +459,82 @@ public partial class MainWindow : Window
         enginePath = dialog.FileName;
         try
         {
-            ConfigStore.WriteAtomic(PreferencesPath, JsonSerializer.Serialize(new { enginePath }));
+            SavePreferences();
             EnginePathText.Text = enginePath;
             Status("已记录本机恢复引擎路径");
         }
         catch (Exception ex) { Error("保存引擎位置失败", ex); }
     }
+
+    private void SavePreferences()
+    {
+        ConfigStore.WriteAtomic(PreferencesPath, JsonSerializer.Serialize(new
+        {
+            enginePath,
+            checkUpdatesAutomatically = AutoCheckUpdates.IsChecked == true
+        }));
+    }
+
+    private void SaveUpdatePreferences_Click(object sender, RoutedEventArgs e)
+    {
+        try { SavePreferences(); Status("更新检查偏好已保存。"); }
+        catch (Exception ex) { Error("保存更新偏好失败", ex); }
+    }
+
+    private async Task CheckStudioUpdatesAsync()
+    {
+        if (checkingUpdates) return;
+        checkingUpdates = true;
+        CheckUpdatesButton.IsEnabled = false;
+        UpdateStatus.Text = "正在连接 GitHub 官方 Release API…";
+        try
+        {
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseProxy = true
+            }) { Timeout = TimeSpan.FromSeconds(12) };
+            latestStudioRelease = await StudioUpdates.CheckAsync(client);
+            if (latestStudioRelease is null)
+            {
+                OpenReleaseButton.IsEnabled = false;
+                UpdateStatus.Text = "尚未发现包含 SHA-256 校验的官方 Studio Release。";
+                UpdateDigest.Text = "SHA-256：尚未获取。";
+            }
+            else
+            {
+                OpenReleaseButton.IsEnabled = latestStudioRelease.Newer;
+                UpdateStatus.Text = latestStudioRelease.Newer
+                    ? $"检测到新版本 {latestStudioRelease.Version}。点击“打开官方更新页面”选择安装包。"
+                    : $"已经是当前可识别的最新版本（{StudioUpdates.CurrentVersion}）。";
+                UpdateDigest.Text = $"官方发布资产 SHA-256：{latestStudioRelease.Sha256}";
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or
+                                   InvalidDataException or System.Text.Json.JsonException)
+        {
+            UpdateStatus.Text = "版本检查未完成（网络、代理或 GitHub API 暂不可用）。不会影响网络恢复。";
+            Status("更新检查失败：" + ex.GetType().Name);
+        }
+        finally { checkingUpdates = false; CheckUpdatesButton.IsEnabled = true; }
+    }
+
+    private void CheckUpdates_Click(object sender, RoutedEventArgs e) => _ = CheckStudioUpdatesAsync();
+
+    private void OpenLatestRelease_Click(object sender, RoutedEventArgs e)
+    {
+        if (latestStudioRelease is not { Newer: true } release) return;
+        Process.Start(new ProcessStartInfo(release.ReleaseUrl) { UseShellExecute = true });
+    }
+
+    private void OpenAllReleases_Click(object sender, RoutedEventArgs e)
+        => Process.Start(new ProcessStartInfo(StudioUpdates.OfficialReleases) { UseShellExecute = true });
+
+    private void OpenCrashFolder_Click(object sender, RoutedEventArgs e)
+        => OpenFolder(Path.Combine(AppPaths.Studio, "crashes"));
+
+    private void OpenInstalledApps_Click(object sender, RoutedEventArgs e)
+        => Process.Start(new ProcessStartInfo("ms-settings:appsfeatures") { UseShellExecute = true });
 
     private void StartEngine_Click(object sender, RoutedEventArgs e)
     {
