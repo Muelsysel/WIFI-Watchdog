@@ -50,8 +50,44 @@ jobs:
           Copy-Item LICENSE dist/Studio/LICENSE
           Compress-Archive -Path dist/Studio/* -DestinationPath dist/WiFiWatchdog-Studio-win-x64-preview.zip -Force
           Get-FileHash dist/WiFiWatchdog-Studio-win-x64-preview.zip -Algorithm SHA256 | Format-List
+      - name: Install NSIS compiler (build tools only)
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress --limit-output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile per-user Studio installer
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\\NSIS\\makensis.exe"
+          if (!(Test-Path $compiler)) { throw "NSIS compiler missing" }
+          $source = (Resolve-Path dist/Studio).Path
+          $out = Join-Path (Resolve-Path dist).Path "WiFiWatchdog-Studio-Setup-x64.exe"
+          & $compiler "/DSTUDIO_SOURCE=$source" "/DSTUDIO_OUTPUT=$out" "/DSTUDIO_VERSION=0.3.0-preview" desktop/installer/studio.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Silent installer/uninstaller smoke test - preserve user data
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path dist/WiFiWatchdog-Studio-Setup-x64.exe).Path
+          $appDir = Join-Path $env:LOCALAPPDATA 'Programs\\WiFiWatchdogStudio'
+          $sentinel = Join-Path $env:LOCALAPPDATA 'WiFiWatchdog\\Studio\\ci-keep-data.txt'
+          New-Item -ItemType Directory -Force (Split-Path $sentinel) | Out-Null
+          Set-Content -Path $sentinel -Value 'user-data-survives-uninstall'
+          try {
+            $install = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+            if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
+            if (!(Test-Path (Join-Path $appDir 'WiFiWatchdog.Studio.exe'))) { throw 'Studio exe missing after install' }
+            if (!(Test-Path (Join-Path $appDir 'Engine\\WiFiWatchdog.exe'))) { throw 'Go engine missing after install' }
+            $uninstall = Join-Path $appDir 'Uninstall.exe'
+            $removed = Start-Process -FilePath $uninstall -ArgumentList '/S' -Wait -PassThru
+            if ($removed.ExitCode -ne 0) { throw "Uninstaller failed: $($removed.ExitCode)" }
+            if (!(Test-Path $sentinel)) { throw 'Uninstaller deleted user data' }
+            Write-Host 'Per-user install/uninstall smoke test passed; user data preserved.'
+          } finally { Remove-Item $sentinel -Force -ErrorAction SilentlyContinue }
+
       - uses: actions/upload-artifact@v4
         with:
           name: WiFiWatchdog-Studio-Windows-x64
-          path: dist/WiFiWatchdog-Studio-win-x64-preview.zip
+          path: |\n            dist/WiFiWatchdog-Studio-win-x64-preview.zip\n            dist/WiFiWatchdog-Studio-Setup-x64.exe
           if-no-files-found: error
