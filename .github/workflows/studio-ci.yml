@@ -53,7 +53,7 @@ jobs:
       - name: Install NSIS compiler (build tools only)
         shell: pwsh
         run: |
-          $url = 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip'
+          $url = 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip'
           $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
           $root = Join-Path $env:RUNNER_TEMP 'nsis-3.11-pinned'
           Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRedirection 8
