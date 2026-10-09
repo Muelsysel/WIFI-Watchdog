@@ -59,7 +59,7 @@ jobs:
       - name: Compile per-user Studio installer
         shell: pwsh
         run: |
-          $compiler = "${env:ProgramFiles(x86)}\\NSIS\\makensis.exe"
+          $compiler = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'NSIS\makensis.exe'
           if (!(Test-Path $compiler)) { throw "NSIS compiler missing" }
           $source = (Resolve-Path dist/Studio).Path
           $out = Join-Path (Resolve-Path dist).Path "WiFiWatchdog-Studio-Setup-x64.exe"
@@ -89,5 +89,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: WiFiWatchdog-Studio-Windows-x64
-          path: |\n            dist/WiFiWatchdog-Studio-win-x64-preview.zip\n            dist/WiFiWatchdog-Studio-Setup-x64.exe
+          path: |
+            dist/WiFiWatchdog-Studio-win-x64-preview.zip
+            dist/WiFiWatchdog-Studio-Setup-x64.exe
           if-no-files-found: error
