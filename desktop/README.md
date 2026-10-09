@@ -15,6 +15,18 @@
 
 Studio 只进行**只读网络诊断**，不会切换 Mihomo 节点、重启代理、断开 Wi-Fi 或启停网卡。真正的网络恢复交给 Portable 引擎，支持 Windows UAC。无需两个自动修复进程。
 
+## Studio Preview 0.3：安装、更新与崩溃恢复
+
+**独立安装版 + ZIP 便携安装方式并存。** Release 提供 `WiFiWatchdog-Studio-Setup-x64.exe` 和原 ZIP。安装器由 Windows CI 使用 NSIS 构建，默认安装至当前用户的 `%LOCALAPPDATA%\\Programs\\WiFiWatchdogStudio`，建立开始菜单入口，支持 Windows“已安装应用”卸载，无需让 Studio 常驻管理员权限。便携恢复引擎仍在 `Engine/` 中，只有主动点击启动恢复引擎时才通过 UAC 申请权限。
+
+**卸载保留数据。** NSIS 卸载仅清理 Studio 安装目录、HKCU 卸载注册表项和当前用户开始菜单快捷方式；**不会删除** `%LOCALAPPDATA%\\WiFiWatchdog` 中的便携引擎配置、日志、用户方案及 Studio 本机诊断历史。如果你的 Go 引擎正在安装目录的 `Engine/` 下运行，请先从托盘正常退出后再升级或卸载安装版。
+
+**安全的官方版本检查。** “更新与维护”可手动读取 GitHub 官方 Studio Release 元数据，检查 `studio-v...` 标签并显示其 ZIP 的 SHA-256；可选在打开 Studio 时执行一次版本检查（默认关闭）。用户点击后仅打开经过固定项目 URL 构造的官方发布页面。**不会自动下载、安装、执行未经签名的更新或更换正在运行的引擎**。更新检查只访问 GitHub API，不发送诊断内容或日志。
+
+**本机异常摘要。** 未处理的 WPF 或后台异常会按日期写入 `%LOCALAPPDATA%\\WiFiWatchdog\\Studio\\crashes`，仅保留 UTC 时间、组件及异常类型，不存储异常消息、完整堆栈、SSID、IP 或任何 Controller Secret。默认保留 14 天。Studio 意外结束不应停止单独运行的 Go 引擎。
+
+**仍未完成的商用品质步骤：** 代码签名、企业自动化部署、自动应用升级的签名/哈希验证、Windows 11 各种 DPI/辅助功能/安全策略下的实机验收，以及压力测试。此版本仍标为 Preview。
+
 ## Studio Preview 0.2 新能力
 
 - **网络适配器工作台**：实时列出 Wi-Fi、以太网、虚拟 VPN/TUN 接口（按名称进行保守提示），显示网络接口状态、报告链路速率、IPv4 / IPv6、网关和 DNS。全部只读；本机地址不会写入默认诊断历史或自动上报。
