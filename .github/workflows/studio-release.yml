@@ -1,4 +1,5 @@
 name: Publish WiFi Watchdog Studio
+# Studio 0.3 installation/update release; this workflow is independent of Portable.
 
 on:
   push:
