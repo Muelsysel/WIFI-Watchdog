@@ -76,9 +76,20 @@ jobs:
       - name: Build installable Studio setup
         shell: pwsh
         run: |
-          choco install nsis --yes --no-progress --limit-output
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $compiler = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'NSIS\makensis.exe'
+          $url = 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip'
+          $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
+          $root = Join-Path $env:RUNNER_TEMP 'nsis-3.11-pinned'
+          Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRedirection 8
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1') {
+            throw "Pinned NSIS archive checksum mismatch: $actual"
+          }
+          Expand-Archive $archive $root -Force
+          $compiler = Get-ChildItem $root -Filter makensis.exe -Recurse -File | Select-Object -First 1 -ExpandProperty FullName
+          if (!$compiler) { throw 'Pinned NSIS archive lacks makensis.exe' }
+          "NSIS_COMPILER=$compiler" | Out-File -Encoding utf8 -Append $env:GITHUB_ENV
+
+          $compiler = $env:NSIS_COMPILER
           if (!(Test-Path $compiler)) { throw 'NSIS compiler missing' }
           $source = (Resolve-Path dist/Studio).Path
           $output = Join-Path (Resolve-Path dist).Path 'WiFiWatchdog-Studio-Setup-x64.exe'
