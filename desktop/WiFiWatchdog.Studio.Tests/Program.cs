@@ -167,7 +167,7 @@ try
             { Content = new StringContent(apiPayload, Encoding.UTF8, "application/json") };
     })))
     {
-        Check((await StudioUpdates.CheckAsync(apiClient))?.Newer == true,
+        Check((await StudioUpdates.CheckAsync(apiClient))?.Version == "0.3.1-preview",
             "parse official release metadata through injected HTTP client");
     }
 
