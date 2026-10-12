@@ -9,7 +9,7 @@ public sealed record StudioUpdate(string Version, string Tag, string ReleaseUrl,
 
 public static class StudioUpdates
 {
-    public const string CurrentVersion = "0.3.0-preview";
+    public const string CurrentVersion = "0.3.1-preview";
     public const string ReleaseApi = "https://api.github.com/repos/Muelsysel/WIFI-Watchdog/releases?per_page=30";
     public const string OfficialReleases = "https://github.com/Muelsysel/WIFI-Watchdog/releases";
     public const string ExpectedAsset = "WiFiWatchdog-Studio-windows-amd64.zip";
