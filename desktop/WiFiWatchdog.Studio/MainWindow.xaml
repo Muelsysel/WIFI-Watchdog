@@ -342,7 +342,7 @@
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Studio 版本更新" Style="{StaticResource Section}"/>
-                                <TextBlock x:Name="InstalledStudioVersion" Text="当前版本：0.3.0-preview" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,11"/>
+                                <TextBlock x:Name="InstalledStudioVersion" Text="当前版本：0.3.1-preview" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,11"/>
                                 <TextBlock x:Name="UpdateStatus" Text="尚未检查。更新只从本项目官方 GitHub Release 获取，不会自动执行安装程序。" Style="{StaticResource Meta}" Margin="0,0,0,17"/>
                                 <WrapPanel>
                                     <Button x:Name="CheckUpdatesButton" Content="检查官方版本" Style="{StaticResource PrimaryButton}" Click="CheckUpdates_Click" Margin="0,0,12,8"/>

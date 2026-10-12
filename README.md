@@ -6,6 +6,10 @@
 >
 > GitHub：`https://github.com/Muelsysel/WIFI-Watchdog`
 
+## Studio v0.3.1-preview：内置恢复引擎同步修复
+
+Studio 桌面版的 ZIP 和 Setup 安装包均更新内置 Go 引擎为 v1.6.2-rc.1，避免“HTTP 全部失败但 TCP 部分可达”被错误判断为在线。Studio 的用户配置和日志不需要删除。
+
 ## v1.6.2-rc.1：修复 HTTP 全失败时 TCP 误判在线
 
 已修复 2026-10-12 实际运行日志发现的问题：**4/4 HTTP 全部超时、TCP 1/2 成功时，旧版错误记录为 `Online=true`，导致不断显示“10 分钟后检查”而不触发快速复检**。

@@ -15,6 +15,10 @@
 
 Studio 只进行**只读网络诊断**，不会切换 Mihomo 节点、重启代理、断开 Wi-Fi 或启停网卡。真正的网络恢复交给 Portable 引擎，支持 Windows UAC。无需两个自动修复进程。
 
+## Studio v0.3.1-preview — bundled Go engine false-online hotfix
+
+Studio GUI and installer features are unchanged. Both ZIP and Setup now bundle Go engine **v1.6.2-rc.1**, which fixes a real false-online error: 4/4 HTTP timeouts with 1/2 raw TCP connections no longer count as normal Internet. The engine now proceeds with consecutive fast rechecks, deep VPN/Wi-Fi diagnosis and conservative Wi-Fi protection. Users running a standalone older Go engine must update that instance separately.
+
 ## Studio Preview 0.3：安装、更新与崩溃恢复
 
 **独立安装版 + ZIP 便携安装方式并存。** Release 提供 `WiFiWatchdog-Studio-Setup-x64.exe` 和原 ZIP。安装器由 Windows CI 使用 NSIS 构建，默认安装至当前用户的 `%LOCALAPPDATA%\\Programs\\WiFiWatchdogStudio`，建立开始菜单入口，支持 Windows“已安装应用”卸载，无需让 Studio 常驻管理员权限。便携恢复引擎仍在 `Engine/` 中，只有主动点击启动恢复引擎时才通过 UAC 申请权限。
