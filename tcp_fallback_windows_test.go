@@ -69,7 +69,7 @@ func TestTCPOnlyWithAssociatedWiFiEntersProtectedOfflineFlow(t *testing.T) {
 func TestTCPOnlyWithLostWiFiStillAllowsProfileRecovery(t *testing.T) {
 	n := NetworkAssessment{
 		System: SystemProbeResult{HTTPAttempted: 4, TCPReachable: true},
-		WiFi: wifiInfo{Connected: false, InterfaceGUID: "{ABC}"},
+		WiFi:   wifiInfo{Connected: false, InterfaceGUID: "{ABC}"},
 	}
 	classifyNetworkAssessment(&n)
 	if n.Online || !n.ShouldRepairWiFi || n.UnderlayProtected {
@@ -80,8 +80,8 @@ func TestTCPOnlyWithLostWiFiStillAllowsProfileRecovery(t *testing.T) {
 func TestTCPOnlyWithoutIPv4AllowsRepairWhenVPNUnderlayBroken(t *testing.T) {
 	n := NetworkAssessment{
 		System: SystemProbeResult{HTTPAttempted: 4, TCPReachable: true},
-		WiFi: wifiInfo{Connected: true, InterfaceName: "WLAN"},
-		VPN: VPNStatus{Detected: true},
+		WiFi:   wifiInfo{Connected: true, InterfaceName: "WLAN"},
+		VPN:    VPNStatus{Detected: true},
 		Underlay: WiFiUnderlayStatus{
 			StrongFault: true,
 			Reason:      "no IPv4",

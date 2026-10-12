@@ -39,7 +39,7 @@ type SystemProbeResult struct {
 	ReachedHTTP        int
 	TCPAttempted       int
 	TCPFallbackSuccess int
-	TCPReachable      bool // only TCP handshake; cannot prove usable Internet
+	TCPReachable       bool // only TCP handshake; cannot prove usable Internet
 	CaptiveSuspected   bool
 	Details            []HTTPProbeDetail
 }
