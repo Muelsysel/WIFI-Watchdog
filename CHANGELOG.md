@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.2-rc.1 — Stop treating one raw TCP handshake as usable Internet
+
+- Fix real false-online report: 4/4 HTTP requests timed out while TCP connected to 1/2 target(s); prior versions incorrectly reported `Online=true` and skipped fast rechecks.
+- Raw public TCP handshakes are **weak evidence only**. They never set `Online=true` or suppress VPN/TUN and physical Wi-Fi diagnosis.
+- Count both TCP handshake results; new log text explicitly says `Online=false` and `仅TCP握手可达，HTTP不可用/未验证`.
+- After consecutive failed HTTP checks, protect Wi-Fi that remains associated with IPv4 when only raw TCP can be established. Broken physical Wi-Fi association/missing IPv4 remain eligible for recovery.
+- Reproduce the user's recorded failure and edge cases with six new offline/recovery safety regression tests.
+- Studio continues to bundle the same Go engine; future Studio builds automatically get this fix.
+
 ## v1.6.1-rc.1 — Correct Internet probe reporting
 
 - Regular unattended checks still return immediately on the **first validated HTTP result** to minimize latency and CPU/network activity.

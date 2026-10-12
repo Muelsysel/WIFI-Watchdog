@@ -39,6 +39,7 @@ type SystemProbeResult struct {
 	ReachedHTTP        int
 	TCPAttempted       int
 	TCPFallbackSuccess int
+	TCPReachable       bool // only TCP handshake; cannot prove usable Internet
 	CaptiveSuspected   bool
 	Details            []HTTPProbeDetail
 }
@@ -233,8 +234,10 @@ func (a *App) systemInternetProbeMode(full bool) SystemProbeResult {
 		}
 	}
 
-	// If HTTP is filtered but raw public TCP is reachable, still prefer a
-	// false-negative-avoiding "online/degraded" result over resetting Wi-Fi.
+	// A successful TCP handshake only shows that a socket is reachable. It
+	// does NOT prove usable HTTP/HTTPS Internet access (e.g., campus policy,
+	// captive gateway, VPN/TUN split route, stalled TLS handshake).
+	// Keep Online=false and continue deep VPN/Wi-Fi diagnostics.
 	tcpTargets := []string{"1.1.1.1:443", "223.5.5.5:53"}
 	r.TCPAttempted = len(tcpTargets)
 	tcpCh := make(chan bool, len(tcpTargets))
@@ -251,17 +254,29 @@ func (a *App) systemInternetProbeMode(full bool) SystemProbeResult {
 			tcpCh <- false
 		}()
 	}
+	tcpResults := make([]bool, 0, len(tcpTargets))
 	for range tcpTargets {
-		if <-tcpCh {
-			r.TCPFallbackSuccess++
-			r.Online = true
-			return r
-		}
+		tcpResults = append(tcpResults, <-tcpCh)
 	}
+	applyTCPHandshakeResults(&r, tcpResults)
 	if plainUnexpected {
 		r.CaptiveSuspected = true
 	}
 	return r
+}
+
+// TCP fallback is a weak *diagnostic signal*, not a substitute for validated
+// HTTP. This separation is critical when TUN allows TCP SYN/ACK but upstream
+// TLS or HTTP is blocked. No single TCP result can set Online=true.
+func applyTCPHandshakeResults(r *SystemProbeResult, results []bool) {
+	r.TCPAttempted = len(results)
+	r.TCPFallbackSuccess = 0
+	for _, reachable := range results {
+		if reachable {
+			r.TCPFallbackSuccess++
+		}
+	}
+	r.TCPReachable = r.TCPFallbackSuccess > 0
 }
 
 func formatSystemProbeLog(r SystemProbeResult) string {
@@ -300,9 +315,15 @@ func formatSystemProbeLog(r SystemProbeResult) string {
 	if r.TCPAttempted > 0 {
 		tcpStatus = fmt.Sprintf("%d/%d", r.TCPFallbackSuccess, r.TCPAttempted)
 	}
-	return fmt.Sprintf("系统互联网探测[%s]：HTTP已统计=%d/%d，有效=%d，响应异常=%d，请求失败=%d，未统计=%d；TCP兜底=%s；Online=%t；%s",
+	state := "互联网未验证"
+	if r.Online {
+		state = "HTTP已验证可用"
+	} else if r.TCPReachable {
+		state = "仅TCP握手可达，HTTP不可用/未验证"
+	}
+	return fmt.Sprintf("系统互联网探测[%s]：HTTP已统计=%d/%d，有效=%d，响应异常=%d，请求失败=%d，未统计=%d；TCP握手=%s（不代表可正常上网）；Online=%t；判定=%s；%s",
 		mode, len(r.Details), r.HTTPAttempted, r.ValidHTTP, unexpected, failed, unverified,
-		tcpStatus, r.Online, strings.Join(parts, "；"))
+		tcpStatus, r.Online, state, strings.Join(parts, "；"))
 }
 
 func (a *App) logSystemProbe(r SystemProbeResult) {
@@ -718,6 +739,15 @@ func classifyNetworkAssessment(n *NetworkAssessment) {
 		// failing layer. Restarting the physical Wi-Fi is counterproductive.
 		n.VPNProtected = true
 		n.Reason = "Mihomo 混合代理 HTTPS 可用，但系统互联网探测失败；优先排查 TUN 路由/DNS，禁止重启 Wi-Fi"
+		return
+	}
+	if n.System.TCPReachable && n.WiFi.Connected && n.Underlay.IPv4 != nil {
+		// Even if all four HTTP probes fail, a partly reachable raw TCP
+		// endpoint is insufficient evidence for an invasive WLAN reset.
+		// Do NOT mark Online: escalate to repeated checks and warnings,
+		// while protecting an associated physical Wi-Fi with IPv4.
+		n.UnderlayProtected = true
+		n.Reason = "四项HTTP验证均失败，只有部分TCP握手可达；Wi-Fi仍关联且有IPv4，先排查代理/TUN/DNS/认证，保护网卡"
 		return
 	}
 	if n.Underlay.DirectProbeOK {
