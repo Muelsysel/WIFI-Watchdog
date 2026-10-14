@@ -97,7 +97,7 @@ jobs:
             Write-Host 'Per-user install/uninstall smoke test passed; user data preserved.'
           } finally { Remove-Item $sentinel -Force -ErrorAction SilentlyContinue }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: WiFiWatchdog-Studio-Windows-x64
           path: |
